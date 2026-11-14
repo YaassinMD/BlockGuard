@@ -19,6 +19,7 @@ import {
   ArrowRight, Menu, X, ChevronRight, Lock, Eye, BarChart3, Fingerprint,
   Package, Factory, AlertTriangle, RefreshCw, Info, Zap, Globe, Clock
 } from 'lucide-react';
+import { signOut } from 'next-auth/react';
 
 /* ───────────────── Types ───────────────── */
 interface Product {
@@ -56,24 +57,67 @@ interface Verification {
   createdAt: string;
 }
 
-interface Stats {
-  totalProducts: number;
-  totalBlocks: number;
-  totalVerifications: number;
-  authenticVerifications: number;
-  fakeVerifications: number;
-  categories: { category: string; _count: { id: number } }[];
-  manufacturers: { manufacturer: string; _count: { id: number } }[];
-  recentVerifications: Verification[];
-  recentProducts: Product[];
-  chainIntegrity: boolean;
-}
+  interface AdminStats {
+    users: {
+      total: number;
+      manufacturers: number;
+      customers: number;
+      activeManufacturers: number;
+      inactiveManufacturers: number;
+    };
+    products: {
+      total: number;
+    };
+    verifications: {
+      total: number;
+      authentic: number;
+      fake: number;
+    };
+    totalProducts: number;
+    totalBlocks: number;
+    totalVerifications: number;
+    fakeVerifications: number;
+    authenticVerifications: number;
+    chainIntegrity: boolean;
+    categories: Array<{
+      category: string;
+      _count: { id: number };
+    }>;
+    generatedAt: string;
+  }
+
+  interface Manufacturer {
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+    isActive: boolean;
+    createdAt: string;
+  }
+
+  interface ManufacturerDashboardData {
+    statistics: {
+      totalProducts: number;
+      totalVerifications: number;
+      authenticVerifications: number;
+      fakeVerifications: number;
+    };
+    products: Array<{
+      id: string;
+      name: string;
+      category: string;
+      batchNo: string;
+      qrCode: string;
+      createdAt: string;
+      verificationCount: number;
+    }>;
+  }
 
 /* ───────────────── Component ───────────────── */
 export default function Home() {
   const [activeSection, setActiveSection] = useState('home');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [stats, setStats] = useState<Stats | null>(null);
+  const [stats, setStats] = useState<AdminStats | null>(null);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [verifyCode, setVerifyCode] = useState('');
@@ -92,7 +136,13 @@ export default function Home() {
   const [isSeeding, setIsSeeding] = useState(false);
   const [selectedBlock, setSelectedBlock] = useState<Block | null>(null);
   const [scanning, setScanning] = useState(false);
-
+  const [currentRole, setCurrentRole] = useState<string | null>(null);
+  const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
+  const [manufacturers, setManufacturers] = useState<Manufacturer[]>([]);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [manufacturerDashboard, setManufacturerDashboard] = useState<ManufacturerDashboardData | null>(null);
+  const [manufacturerLoading, setManufacturerLoading] = useState(false);
+  const [dashboardError, setDashboardError] = useState('');
   const fetchData = useCallback(async () => {
     try {
       const [statsRes, blocksRes, productsRes] = await Promise.all([
@@ -123,19 +173,103 @@ export default function Home() {
   };
 
   useEffect(() => {
-    const init = async () => {
-      setIsSeeding(true);
-      try {
-        await fetch('/api/seed', { method: 'POST' });
-        await fetchData();
-      } catch (err) {
-        console.error('Seed failed:', err);
-      }
-      setIsSeeding(false);
-    };
-    init();
-  }, []);
+    fetchData();
+  }, [fetchData]);
+  useEffect(() => {
+  let cancelled = false;
 
+  const loadAdminData = async () => {
+    try {
+      const sessionRes = await fetch('/api/auth/session');
+      const session = await sessionRes.json();
+      const role = session?.user?.role ?? null;
+
+      if (cancelled) return;
+      setCurrentRole(role);
+      setDashboardError('');
+
+      if (role === 'MANUFACTURER') {
+        setManufacturerLoading(true);
+        const manufacturerRes = await fetch('/api/manufacturer/dashboard');
+        if (!manufacturerRes.ok) throw new Error('Failed to load manufacturer data');
+        const manufacturerData = await manufacturerRes.json();
+        if (!cancelled) setManufacturerDashboard(manufacturerData);
+        return;
+      }
+
+      if (role !== 'ADMIN') return;
+
+      setAdminLoading(true);
+
+      const [statsRes, manufacturersRes] = await Promise.all([
+        fetch('/api/admin/stats'),
+        fetch('/api/admin/manufacturers'),
+      ]);
+
+      if (!statsRes.ok || !manufacturersRes.ok) {
+        throw new Error('Failed to load admin data');
+      }
+
+      const [statsData, manufacturersData] = await Promise.all([
+        statsRes.json(),
+        manufacturersRes.json(),
+      ]);
+
+      if (!cancelled) {
+        setAdminStats(statsData);
+        setManufacturers(manufacturersData.manufacturers ?? []);
+      }
+    } catch (error) {
+      console.error('Admin data loading failed:', error);
+      if (!cancelled) setDashboardError('Dashboard data could not be loaded. Please refresh and try again.');
+    } finally {
+      if (!cancelled) {
+        setAdminLoading(false);
+        setManufacturerLoading(false);
+      }
+    }
+  };
+
+  loadAdminData();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
+  const toggleManufacturerStatus = async (
+    id: string,
+    isActive: boolean
+  ) => {
+    try {
+      const res = await fetch('/api/admin/manufacturers', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, isActive }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to update manufacturer');
+      }
+
+      setManufacturers(prev =>
+        prev.map(manufacturer =>
+          manufacturer.id === id
+            ? { ...manufacturer, isActive }
+            : manufacturer
+        )
+      );
+
+      toast.success(
+        `Manufacturer ${isActive ? 'activated' : 'deactivated'} successfully`
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Something went wrong'
+      );
+    }
+  };
   const handleVerify = async () => {
     if (!verifyCode.trim()) return;
     setIsVerifying(true);
@@ -153,6 +287,15 @@ export default function Home() {
         body: JSON.stringify({ qrCode: verifyCode.trim() }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        setVerifyResult({
+          isAuthentic: false,
+          result: data.error || 'Verification could not be completed. Please try again.',
+          product: null,
+        });
+        setIsVerifying(false);
+        return;
+      }
       setVerifyResult(data);
     } catch (err) {
       setVerifyResult({
@@ -201,7 +344,7 @@ export default function Home() {
   const navItems = [
     { id: 'home', label: 'Home' },
     { id: 'verify', label: 'Verify Product' },
-    { id: 'register', label: 'Register' },
+    ...(currentRole === 'ADMIN' || currentRole === 'MANUFACTURER' ? [{ id: 'register', label: 'Register' }] : []),
     { id: 'blockchain', label: 'Blockchain' },
     { id: 'dashboard', label: 'Dashboard' },
   ];
@@ -259,8 +402,31 @@ export default function Home() {
                 <QrCode className="w-4 h-4 mr-2" />
                 Verify Now
               </Button>
+              {currentRole ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => signOut({ callbackUrl: '/' })}
+                >
+                  Logout ({currentRole})
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => window.location.assign('/login')}
+                >
+                  Login
+                </Button>
+              )}
             </div>
-            <button className="md:hidden" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+            <button
+              type="button"
+              className="md:hidden"
+              aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              aria-expanded={mobileMenuOpen}
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            >
               {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
             </button>
           </div>
@@ -288,6 +454,23 @@ export default function Home() {
                     {item.label}
                   </button>
                 ))}
+                {currentRole ? (
+                    <Button
+                      variant="outline"
+                      className="w-full mt-2"
+                      onClick={() => signOut({ callbackUrl: '/' })}
+                    >
+                      Logout ({currentRole})
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      className="w-full mt-2"
+                      onClick={() => window.location.assign('/login')}
+                    >
+                      Login
+                    </Button>
+                  )}
                 <Button size="sm" className="w-full mt-2 bg-emerald-600 hover:bg-emerald-700" onClick={() => scrollTo('verify')}>
                   <QrCode className="w-4 h-4 mr-2" />
                   Verify Now
@@ -718,7 +901,7 @@ export default function Home() {
         </section>
 
         {/* ═══════ REGISTER PRODUCT ═══════ */}
-        <section id="register" className="py-20 bg-gray-50 dark:bg-gray-900">
+        {(currentRole === 'ADMIN' || currentRole === 'MANUFACTURER') && <section id="register" className="py-20 bg-gray-50 dark:bg-gray-900">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -866,7 +1049,7 @@ export default function Home() {
               </Card>
             </motion.div>
           </div>
-        </section>
+        </section>}
 
         {/* ═══════ BLOCKCHAIN EXPLORER ═══════ */}
         <section id="blockchain" className="py-20 bg-white dark:bg-gray-950">
@@ -889,8 +1072,128 @@ export default function Home() {
               </p>
             </motion.div>
 
+              {/* ADMIN DASHBOARD */}
+              {currentRole === 'ADMIN' && (
+                <div className="mb-10 space-y-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Badge className="bg-purple-100 text-purple-800">
+                        Admin Panel
+                      </Badge>
+                      <h3 className="text-2xl font-bold mt-2">
+                        Administration Overview
+                      </h3>
+                      <p className="text-sm text-gray-500 mt-1">
+                        Manage platform users and monitor system activity.
+                      </p>
+                    </div>
+                    {adminLoading && (
+                      <RefreshCw className="w-5 h-5 animate-spin text-emerald-600" />
+                    )}
+                  </div>
+
+                  {dashboardError && <p role="alert" className="text-sm text-red-600">{dashboardError}</p>}
+                  {!adminLoading && !dashboardError && !adminStats && (
+                    <p className="text-sm text-gray-500">No administration statistics are available yet.</p>
+                  )}
+
+                  {adminStats && (
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                      {[
+                        { label: 'Total Users', value: adminStats.users.total },
+                        { label: 'Manufacturers', value: adminStats.users.manufacturers },
+                        { label: 'Customers', value: adminStats.users.customers },
+                        { label: 'Active Manufacturers', value: adminStats.users.activeManufacturers },
+                        { label: 'Registered Products', value: adminStats.products.total },
+                        { label: 'Total Verifications', value: adminStats.verifications.total },
+                        { label: 'Authentic Results', value: adminStats.verifications.authentic },
+                        { label: 'Fake Results', value: adminStats.verifications.fake },
+                      ].map((item) => (
+                        <Card key={item.label}>
+                          <CardContent className="p-5">
+                            <p className="text-xs text-gray-500 uppercase tracking-wide">
+                              {item.label}
+                            </p>
+                            <p className="text-2xl font-bold mt-2">
+                              {item.value}
+                            </p>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Manufacturer Management */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Factory className="w-5 h-5 text-emerald-600" />
+                        Manufacturer Management
+                      </CardTitle>
+                      <CardDescription>
+                        View manufacturer accounts and manage their access.
+                      </CardDescription>
+                    </CardHeader>
+
+                    <CardContent>
+                      {manufacturers.length === 0 ? (
+                        <p className="text-sm text-gray-500 text-center py-6">
+                          No manufacturer accounts found.
+                        </p>
+                      ) : (
+                        <div className="space-y-3">
+                          {manufacturers.map((manufacturer) => (
+                            <div
+                              key={manufacturer.id}
+                              className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 border rounded-lg"
+                            >
+                              <div>
+                                <p className="font-semibold">
+                                  {manufacturer.name}
+                                </p>
+                                <p className="text-sm text-gray-500">
+                                  {manufacturer.email}
+                                </p>
+                                <p className="text-xs text-gray-400 mt-1">
+                                  Joined: {new Date(manufacturer.createdAt).toLocaleDateString()}
+                                </p>
+                              </div>
+
+                              <div className="flex items-center gap-3">
+                                <Badge
+                                  className={
+                                    manufacturer.isActive
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : 'bg-red-100 text-red-800'
+                                  }
+                                >
+                                  {manufacturer.isActive ? 'Active' : 'Inactive'}
+                                </Badge>
+
+                                <Button
+                                  size="sm"
+                                  variant={manufacturer.isActive ? 'destructive' : 'default'}
+                                  onClick={() =>
+                                    toggleManufacturerStatus(
+                                      manufacturer.id,
+                                      !manufacturer.isActive
+                                    )
+                                  }
+                                >
+                                  {manufacturer.isActive ? 'Deactivate' : 'Activate'}
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
+
             {/* Chain integrity */}
-            {stats && (
+            {currentRole !== 'MANUFACTURER' && stats && (
               <div className="mb-8 flex items-center justify-center gap-2">
                 <div className={`w-3 h-3 rounded-full ${stats.chainIntegrity ? 'bg-emerald-500' : 'bg-red-500'}`} />
                 <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
@@ -1065,7 +1368,49 @@ export default function Home() {
               </p>
             </motion.div>
 
-            {stats && (
+            {currentRole === 'MANUFACTURER' && (
+              <div className="mb-10 space-y-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Badge className="bg-emerald-100 text-emerald-800">Manufacturer Portal</Badge>
+                    <h3 className="text-2xl font-bold mt-2">Manufacturer Dashboard</h3>
+                    <p className="text-sm text-gray-500 mt-1">Products and verification activity for your account.</p>
+                  </div>
+                  {manufacturerLoading && <RefreshCw className="w-5 h-5 animate-spin text-emerald-600" />}
+                </div>
+                {dashboardError && <p role="alert" className="text-sm text-red-600">{dashboardError}</p>}
+                {!manufacturerLoading && !dashboardError && !manufacturerDashboard && (
+                  <p className="text-sm text-gray-500">Dashboard data is not available yet.</p>
+                )}
+                {manufacturerDashboard && <>
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    {[
+                      { label: 'Registered Products', value: manufacturerDashboard.statistics.totalProducts },
+                      { label: 'Verification Attempts', value: manufacturerDashboard.statistics.totalVerifications },
+                      { label: 'Authentic Results', value: manufacturerDashboard.statistics.authenticVerifications },
+                      { label: 'Fake Results', value: manufacturerDashboard.statistics.fakeVerifications },
+                    ].map((item) => <Card key={item.label}><CardContent className="p-5">
+                      <p className="text-xs text-gray-500 uppercase tracking-wide">{item.label}</p>
+                      <p className="text-2xl font-bold mt-2">{item.value}</p>
+                    </CardContent></Card>)}
+                  </div>
+                  <Card>
+                    <CardHeader><CardTitle>Your Registered Products</CardTitle><CardDescription>Products registered by your manufacturer account.</CardDescription></CardHeader>
+                    <CardContent>
+                      {manufacturerDashboard.products.length === 0 ? <p className="text-sm text-gray-500 text-center py-6">No products registered yet. Use the Register section to add products.</p> :
+                        <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm text-left">
+                          <thead><tr className="border-b text-gray-500"><th className="py-3 pr-4">Product</th><th className="py-3 pr-4">Category</th><th className="py-3 pr-4">Batch</th><th className="py-3 pr-4">QR Code</th><th className="py-3 pr-4">Registered</th><th className="py-3">Verifications</th></tr></thead>
+                          <tbody>{manufacturerDashboard.products.map(product => <tr key={product.id} className="border-b last:border-0">
+                            <td className="py-3 pr-4 font-medium">{product.name}</td><td className="py-3 pr-4">{product.category}</td><td className="py-3 pr-4">{product.batchNo}</td><td className="py-3 pr-4 font-mono">{product.qrCode}</td><td className="py-3 pr-4">{new Date(product.createdAt).toLocaleDateString()}</td><td className="py-3">{product.verificationCount}</td>
+                          </tr>)}</tbody>
+                        </table></div>}
+                    </CardContent>
+                  </Card>
+                </>}
+              </div>
+            )}
+
+            {currentRole !== 'MANUFACTURER' && stats && (
               <>
                 {/* Stats cards */}
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -1184,52 +1529,6 @@ export default function Home() {
                     </CardContent>
                   </Card>
 
-                  {/* Recent verifications */}
-                  <Card className="lg:col-span-2">
-                    <CardHeader>
-                      <CardTitle className="text-lg flex items-center gap-2">
-                        <Clock className="w-5 h-5 text-purple-600" />
-                        Recent Verification Activity
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      {stats.recentVerifications.length === 0 ? (
-                        <p className="text-sm text-gray-400 text-center py-8">No verifications yet. Try verifying a product above!</p>
-                      ) : (
-                        <div className="space-y-3 max-h-80 overflow-y-auto">
-                          {stats.recentVerifications.map((v, i) => (
-                            <div
-                              key={v.id}
-                              className="flex items-start gap-3 p-3 rounded-lg border hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors"
-                            >
-                              <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                                v.isAuthentic
-                                  ? 'bg-emerald-100 dark:bg-emerald-900'
-                                  : 'bg-red-100 dark:bg-red-900'
-                              }`}>
-                                {v.isAuthentic
-                                  ? <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                                  : <XCircle className="w-4 h-4 text-red-600" />
-                                }
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <Badge variant={v.isAuthentic ? 'default' : 'destructive'} className="text-xs">
-                                    {v.isAuthentic ? 'AUTHENTIC' : 'FAKE'}
-                                  </Badge>
-                                  <span className="text-xs font-mono text-gray-400">{v.qrCode}</span>
-                                </div>
-                                <p className="text-xs text-gray-500 mt-1 truncate">{v.result}</p>
-                                <p className="text-xs text-gray-400 mt-1">
-                                  {new Date(v.createdAt).toLocaleString()}
-                                </p>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
                 </div>
               </>
             )}

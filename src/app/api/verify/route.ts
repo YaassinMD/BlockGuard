@@ -1,11 +1,18 @@
+
 import { db } from '@/lib/db';
+import {
+  verifyChain,
+  isAuthenticProductRecord,
+  type BlockData,
+} from '@/lib/blockchain';
 import { NextRequest, NextResponse } from 'next/server';
 
-// POST /api/verify - Verify a product by QR code
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { qrCode } = body;
+    const body = await request.json().catch(() => null);
+
+    const qrCode =
+      typeof body?.qrCode === 'string' ? body.qrCode.trim() : '';
 
     if (!qrCode) {
       return NextResponse.json(
@@ -14,47 +21,102 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Look up product by QR code
+    if (qrCode.length > 30) {
+      return NextResponse.json(
+        { error: 'Invalid QR code format' },
+        { status: 400 }
+      );
+    }
+
+    // Find the registered product
     const product = await db.product.findUnique({
-      where: { qrCode: qrCode.trim() },
+      where: { qrCode },
     });
 
-    const isAuthentic = !!product;
-    const result = isAuthentic
-      ? `Product "${product.name}" (Batch: ${product.batchNo}) is AUTHENTICATED. Registered by ${product.manufacturer} on ${product.createdAt.toLocaleDateString()}. Blockchain hash verified: ${product.blockchainHash.substring(0, 16)}...`
-      : `Product with QR code "${qrCode}" was NOT found in the blockchain registry. This product may be COUNTERFEIT or the QR code is invalid.`;
+    let isAuthentic = false;
+    let result = 'Product not found in the registration database.';
 
-    // Log the verification
-    await db.verification.create({
-      data: {
-        productId: product?.id ?? null,
-        qrCode: qrCode.trim(),
-        isAuthentic,
-        result,
-        ipAddress: request.headers.get('x-forwarded-for') ?? 'unknown',
-        userAgent: request.headers.get('user-agent') ?? 'unknown',
-      },
-    });
+    if (product) {
+      // Retrieve the complete ledger in block order
+      const storedBlocks = await db.block.findMany({
+        orderBy: { index: 'asc' },
+      });
 
-    // Update product verification count if authentic
-    if (isAuthentic && product) {
-      await db.product.update({
-        where: { id: product.id },
+      const blocks: BlockData[] = storedBlocks.map((block) => ({
+        index: block.index,
+        timestamp: block.timestamp,
+        productId: block.productId,
+        productName: block.productName,
+        hash: block.hash,
+        previousHash: block.previousHash,
+        nonce: block.nonce,
+        data: block.data,
+      }));
+
+      // Validate the entire blockchain ledger
+      const chainResult = verifyChain(blocks);
+
+      if (!chainResult.valid) {
+        result = 'Ledger integrity validation failed. Product authenticity cannot be confirmed.';
+      } else {
+        // Find the block belonging to this product
+        const productBlock = blocks.find(
+          (block) => block.productId === product.id
+        );
+
+        if (!productBlock) {
+          result = 'Product registration record is missing from the ledger.';
+        } else {
+          if (isAuthenticProductRecord(product, productBlock, chainResult.valid)) {
+            isAuthentic = true;
+
+            result = `Product "${product.name}" (Batch: ${product.batchNo}) has been successfully authenticated. Its registration fingerprint and blockchain ledger are valid.`;
+          } else {
+            result =
+              'Product information or registration fingerprint does not match its ledger record. Authenticity could not be confirmed.';
+          }
+        }
+      }
+    }
+
+    // Record verification and update product statistics atomically
+    await db.$transaction(async (tx) => {
+      await tx.verification.create({
         data: {
-          isVerified: true,
-          verifiedCount: { increment: 1 },
+          productId: product?.id ?? null,
+          qrCode,
+          isAuthentic,
+          result,
+          ipAddress:
+            request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+            'unknown',
+          userAgent: request.headers.get('user-agent') ?? 'unknown',
         },
       });
-    }
+
+      if (isAuthentic && product) {
+        await tx.product.update({
+          where: { id: product.id },
+          data: {
+            isVerified: true,
+            verifiedCount: { increment: 1 },
+          },
+        });
+      }
+    });
 
     return NextResponse.json({
       isAuthentic,
       result,
-      product: product ?? null,
+      product: isAuthentic ? product : null,
       timestamp: new Date().toISOString(),
     });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error('Product verification failed:', error);
+
+    return NextResponse.json(
+      { error: 'Unable to verify product. Please try again.' },
+      { status: 500 }
+    );
   }
 }

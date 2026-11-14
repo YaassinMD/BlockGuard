@@ -1,7 +1,5 @@
-
-
-# dependencies
-node_modules
+# Dependencies
+node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -10,46 +8,51 @@ node_modules
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
+# Local environment files (keep the example template in Git)
+.env*
+!.env.example
 
-# next.js
+# Local databases, SQLite journals, and backups
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Next.js and build output
 /.next/
 /out/
+/build/
+/dist/
+/.vercel/
+/.turbo/
+/.e2e-runtime/
+coverage/
 
-# production
-/build
+# Python generated files
+__pycache__/
+*.py[cod]
 
-# misc
-.DS_Store
-*.pem
+# TypeScript and tool caches
+*.tsbuildinfo
+next-env.d.ts
+.cache/
+.eslintcache
 
-# debug
+# Logs and local machine files
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+.DS_Store
+*.pem
 
-# env files (can opt-in for committing if needed)
-.env*
-!.env.example
-
-# vercel
-.vercel
-
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+# Existing local-only settings and scratch files
 local-*
 .claude
 .z-ai-config
-*.log
-dev.log
-dev.out.log
 test
 prompt
 
-server.log
 # Skills directory
 /skills/

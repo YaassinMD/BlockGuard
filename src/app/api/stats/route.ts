@@ -1,7 +1,8 @@
 import { db } from '@/lib/db';
 import { NextResponse } from 'next/server';
+import { verifyChain } from '@/lib/blockchain';
 
-// GET /api/stats - Get dashboard statistics
+// GET /api/stats - Return aggregate dashboard statistics only.
 export async function GET() {
   try {
     const totalProducts = await db.product.count();
@@ -20,22 +21,20 @@ export async function GET() {
       _count: { id: true },
     });
 
-    // Recent verifications
-    const recentVerifications = await db.verification.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 10,
-    });
-
-    // Recent products
-    const recentProducts = await db.product.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-    });
-
-    // Manufacturer breakdown
-    const manufacturers = await db.product.groupBy({
-      by: ['manufacturer'],
-      _count: { id: true },
+    // Read only the fields required to validate the ledger. Block records are
+    // used internally and never included in this public response.
+    const blocks = await db.block.findMany({
+      orderBy: { index: 'asc' },
+      select: {
+        index: true,
+        timestamp: true,
+        productId: true,
+        productName: true,
+        hash: true,
+        previousHash: true,
+        nonce: true,
+        data: true,
+      },
     });
 
     return NextResponse.json({
@@ -45,13 +44,13 @@ export async function GET() {
       authenticVerifications,
       fakeVerifications,
       categories,
-      manufacturers,
-      recentVerifications,
-      recentProducts,
-      chainIntegrity: true,
+      chainIntegrity: verifyChain(blocks).valid,
     });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error('Dashboard statistics request failed');
+    return NextResponse.json(
+      { error: 'Unable to retrieve dashboard statistics' },
+      { status: 500 }
+    );
   }
 }

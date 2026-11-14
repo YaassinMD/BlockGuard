@@ -8,31 +8,33 @@ datasource db {
 }
 
 model Product {
-  id          String   @id @default(cuid())
-  name        String
-  category    String
-  manufacturer String
-  batchNo     String   @unique
-  description String?
-  qrCode      String   @unique
-  blockchainHash String @unique
-  isVerified  Boolean  @default(false)
-  verifiedCount Int    @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               String   @id @default(cuid())
+  name             String
+  category         String
+  manufacturer     String
+  batchNo          String   @unique
+  description      String?
+  qrCode           String   @unique
+  blockchainHash   String   @unique
+  isVerified       Boolean  @default(false)
+  verifiedCount    Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  manufacturerId   String?
+  manufacturerUser User?    @relation("ManufacturerProducts", fields: [manufacturerId], references: [id])
 }
 
 model Block {
-  id          String   @id @default(cuid())
-  index       Int
-  timestamp   String
-  productId   String
-  productName String
-  hash        String
+  id           String   @id @default(cuid())
+  index        Int      @unique
+  timestamp    String
+  productId    String
+  productName  String
+  hash         String
   previousHash String
-  nonce       Int
-  data        String
-  createdAt   DateTime @default(now())
+  nonce        Int
+  data         String
+  createdAt    DateTime @default(now())
 }
 
 model Verification {
@@ -44,4 +46,17 @@ model Verification {
   userAgent   String?
   result      String
   createdAt   DateTime @default(now())
+}
+
+model User {
+  id           String  @id @default(cuid())
+  name         String
+  email        String  @unique
+  passwordHash String
+  role         String  @default("CUSTOMER")
+  isActive     Boolean @default(true)
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  registeredProducts Product[] @relation("ManufacturerProducts")
 }

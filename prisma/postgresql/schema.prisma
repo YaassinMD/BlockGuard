@@ -1,0 +1,65 @@
+// PostgreSQL schema used to generate the application Prisma Client and manage
+// the Neon database. SQLite history remains under ../migrations/.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Product {
+  id               String   @id @default(cuid())
+  name             String
+  category         String
+  manufacturer     String
+  batchNo          String   @unique
+  description      String?
+  qrCode           String   @unique
+  blockchainHash   String   @unique
+  isVerified       Boolean  @default(false)
+  verifiedCount    Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  manufacturerId   String?
+  manufacturerUser User?    @relation("ManufacturerProducts", fields: [manufacturerId], references: [id])
+}
+
+model Block {
+  id           String   @id @default(cuid())
+  index        Int      @unique
+  timestamp    String
+  productId    String
+  productName  String
+  hash         String
+  previousHash String
+  nonce        Int
+  data         String
+  createdAt    DateTime @default(now())
+}
+
+model Verification {
+  id          String   @id @default(cuid())
+  productId   String?
+  qrCode      String
+  isAuthentic Boolean
+  ipAddress   String?
+  userAgent   String?
+  result      String
+  createdAt   DateTime @default(now())
+}
+
+model User {
+  id           String  @id @default(cuid())
+  name         String
+  email        String  @unique
+  passwordHash String
+  role         String  @default("CUSTOMER")
+  isActive     Boolean @default(true)
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  registeredProducts Product[] @relation("ManufacturerProducts")
+}
