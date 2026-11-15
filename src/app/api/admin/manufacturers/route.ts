@@ -8,6 +8,7 @@ import { hashPassword } from '@/lib/password';
 import { requireRole } from '@/lib/authorization';
 
 const manufacturerSchema = z.object({
+  companyName: z.string().trim().min(2).max(150),
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().email().max(254),
   password: z.string().min(12).max(128),
@@ -34,13 +35,38 @@ export async function GET() {
         name: true,
         email: true,
         role: true,
+        companyName: true,
         isActive: true,
         createdAt: true,
+        registeredProducts: { select: { id: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    return NextResponse.json({ manufacturers });
+    const productIds = manufacturers.flatMap(({ registeredProducts }) => registeredProducts.map(({ id }) => id));
+    const verificationCounts = productIds.length
+      ? await db.verification.groupBy({
+          by: ['productId'],
+          where: { productId: { in: productIds } },
+          _count: { _all: true },
+        })
+      : [];
+    const verificationCountByProduct = new Map(
+      verificationCounts.map(({ productId, _count }) => [productId, _count._all])
+    );
+
+    return NextResponse.json({
+      manufacturers: manufacturers.map(({ registeredProducts, ...manufacturer }) => ({
+        ...manufacturer,
+        productCount: registeredProducts.length,
+        verificationCount: registeredProducts.reduce(
+          (total, product) => total + (verificationCountByProduct.get(product.id) ?? 0),
+          0
+        ),
+      })),
+    }, {
+      headers: { 'Cache-Control': 'private, no-store, max-age=0' },
+    });
   } catch (error) {
     console.error('Manufacturer listing failed:', error);
 
@@ -70,7 +96,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { name, password } = validation.data;
+    const { companyName, name, password } = validation.data;
     const email = validation.data.email.toLowerCase();
 
     const passwordHash = await hashPassword(password);
@@ -78,6 +104,7 @@ export async function POST(request: NextRequest) {
     const manufacturer = await db.user.create({
       data: {
         name,
+        companyName,
         email,
         passwordHash,
         role: 'MANUFACTURER',
@@ -88,6 +115,7 @@ export async function POST(request: NextRequest) {
         name: true,
         email: true,
         role: true,
+        companyName: true,
         isActive: true,
         createdAt: true,
       },
@@ -98,7 +126,10 @@ export async function POST(request: NextRequest) {
         message: 'Manufacturer account created successfully',
         manufacturer,
       },
-      { status: 201 }
+      {
+        status: 201,
+        headers: { 'Cache-Control': 'private, no-store, max-age=0' },
+      }
     );
   } catch (error: unknown) {
     if (
@@ -163,6 +194,7 @@ export async function PATCH(request: NextRequest) {
         name: true,
         email: true,
         role: true,
+        companyName: true,
         isActive: true,
       },
     });
@@ -170,6 +202,8 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({
       message: `Manufacturer ${isActive ? 'activated' : 'deactivated'} successfully`,
       manufacturer,
+    }, {
+      headers: { 'Cache-Control': 'private, no-store, max-age=0' },
     });
   } catch (error) {
     console.error('Manufacturer update failed:', error);

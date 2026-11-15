@@ -82,7 +82,10 @@ export async function POST(request: NextRequest) {
         message: 'Account created successfully',
         user,
       },
-      { status: 201 }
+      {
+        status: 201,
+        headers: { 'Cache-Control': 'no-store' },
+      }
     );
   } catch (error: unknown) {
     if (

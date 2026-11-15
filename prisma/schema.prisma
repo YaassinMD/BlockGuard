@@ -18,6 +18,7 @@ model Product {
   blockchainHash   String   @unique
   isVerified       Boolean  @default(false)
   verifiedCount    Int      @default(0)
+  isDemo           Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   manufacturerId   String?
@@ -51,6 +52,7 @@ model Verification {
 model User {
   id           String  @id @default(cuid())
   name         String
+  companyName  String?
   email        String  @unique
   passwordHash String
   role         String  @default("CUSTOMER")

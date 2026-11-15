@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -30,10 +30,20 @@ interface Product {
   batchNo: string;
   description: string | null;
   qrCode: string;
-  blockchainHash: string;
-  isVerified: boolean;
-  verifiedCount: number;
+  blockchainHash?: string;
+  isVerified?: boolean;
+  verifiedCount?: number;
+  isDemo?: boolean;
   createdAt: string;
+}
+
+interface VerifiedProduct {
+  name: string;
+  category: string;
+  manufacturer: string;
+  batchNo: string;
+  description: string | null;
+  isDemo: boolean;
 }
 
 interface Block {
@@ -79,6 +89,7 @@ interface Verification {
     fakeVerifications: number;
     authenticVerifications: number;
     chainIntegrity: boolean;
+    ledgerIntegrity?: boolean;
     categories: Array<{
       category: string;
       _count: { id: number };
@@ -89,13 +100,18 @@ interface Verification {
   interface Manufacturer {
     id: string;
     name: string;
+  companyName: string | null;
     email: string;
     role: string;
     isActive: boolean;
     createdAt: string;
+  productCount: number;
+  verificationCount: number;
   }
 
   interface ManufacturerDashboardData {
+    companyName: string | null;
+    contactName: string;
     statistics: {
       totalProducts: number;
       totalVerifications: number;
@@ -108,13 +124,19 @@ interface Verification {
       category: string;
       batchNo: string;
       qrCode: string;
+      verificationUrl: string;
+      qrImageUrl: string;
+      isDemo: boolean;
       createdAt: string;
       verificationCount: number;
+      authenticVerificationCount: number;
+      invalidVerificationCount: number;
     }>;
   }
 
 /* ───────────────── Component ───────────────── */
 export default function Home() {
+  const autoVerifyQueryHandled = useRef(false);
   const [activeSection, setActiveSection] = useState('home');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -123,13 +145,12 @@ export default function Home() {
   const [verifyCode, setVerifyCode] = useState('');
   const [verifyResult, setVerifyResult] = useState<{
     isAuthentic: boolean;
+    status?: 'AUTHENTIC' | 'INVALID' | 'TAMPERED';
     result: string;
-    product: Product | null;
+    product: VerifiedProduct | null;
   } | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
-  const [registerForm, setRegisterForm] = useState({
-    name: '', category: '', manufacturer: '', batchNo: '', description: ''
-  });
+  const [registerForm, setRegisterForm] = useState({ name: '', category: '', batchNo: '', description: '' });
   const [isRegistering, setIsRegistering] = useState(false);
   const [registerSuccess, setRegisterSuccess] = useState(false);
   const [registerError, setRegisterError] = useState('');
@@ -137,22 +158,28 @@ export default function Home() {
   const [selectedBlock, setSelectedBlock] = useState<Block | null>(null);
   const [scanning, setScanning] = useState(false);
   const [currentRole, setCurrentRole] = useState<string | null>(null);
+  const [currentAccount, setCurrentAccount] = useState<{ name: string | null; email: string | null } | null>(null);
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
   const [manufacturers, setManufacturers] = useState<Manufacturer[]>([]);
+  const [manufacturerForm, setManufacturerForm] = useState({
+    companyName: '', name: '', email: '', password: '',
+  });
+  const [isCreatingManufacturer, setIsCreatingManufacturer] = useState(false);
   const [adminLoading, setAdminLoading] = useState(false);
   const [manufacturerDashboard, setManufacturerDashboard] = useState<ManufacturerDashboardData | null>(null);
   const [manufacturerLoading, setManufacturerLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState('');
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (role: string | null = null) => {
     try {
-      const [statsRes, blocksRes, productsRes] = await Promise.all([
+      const canViewLedger = role === 'ADMIN' || role === 'MANUFACTURER';
+      const [statsRes, productsRes, blocksRes] = await Promise.all([
         fetch('/api/stats'),
-        fetch('/api/blocks'),
         fetch('/api/products'),
+        canViewLedger ? fetch('/api/blocks') : Promise.resolve(null),
       ]);
-      const statsData = await statsRes.json();
-      const blocksData = await blocksRes.json();
-      const productsData = await productsRes.json();
+      const statsData = statsRes.ok ? await statsRes.json() : null;
+      const productsData = productsRes.ok ? await productsRes.json() : [];
+      const blocksData = blocksRes?.ok ? await blocksRes.json() : [];
       setStats(statsData);
       setBlocks(blocksData);
       setProducts(productsData);
@@ -164,12 +191,21 @@ export default function Home() {
   const seedDatabase = async () => {
     setIsSeeding(true);
     try {
-      await fetch('/api/seed', { method: 'POST' });
-      await fetchData();
-    } catch (err) {
-      console.error('Seed failed:', err);
+      const response = await fetch('/api/seed', { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Demo setup failed');
+      await fetchData(currentRole);
+      const manufacturersResponse = await fetch('/api/admin/manufacturers');
+      if (manufacturersResponse.ok) {
+        const manufacturersData = await manufacturersResponse.json();
+        setManufacturers(manufacturersData.manufacturers ?? []);
+      }
+      toast.success('Demo products are ready on the testing database. These are illustrative records only.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Demo setup failed');
+    } finally {
+      setIsSeeding(false);
     }
-    setIsSeeding(false);
   };
 
   useEffect(() => {
@@ -186,7 +222,9 @@ export default function Home() {
 
       if (cancelled) return;
       setCurrentRole(role);
+      setCurrentAccount(role ? { name: session.user?.name ?? null, email: session.user?.email ?? null } : null);
       setDashboardError('');
+      await fetchData(role);
 
       if (role === 'MANUFACTURER') {
         setManufacturerLoading(true);
@@ -235,7 +273,20 @@ export default function Home() {
   return () => {
     cancelled = true;
   };
-}, []);
+}, [fetchData]);
+
+  // The admin dashboard is rendered only after the session role loads, so the
+  // browser's initial hash navigation may run before its target exists.
+  useEffect(() => {
+    if (currentRole !== 'ADMIN' || window.location.hash !== '#admin-dashboard') return;
+
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById('admin-dashboard')?.scrollIntoView({ behavior: 'smooth' });
+      setActiveSection('admin-dashboard');
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentRole]);
+
   const toggleManufacturerStatus = async (
     id: string,
     isActive: boolean
@@ -270,8 +321,31 @@ export default function Home() {
       );
     }
   };
-  const handleVerify = async () => {
-    if (!verifyCode.trim()) return;
+
+  const handleCreateManufacturer = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsCreatingManufacturer(true);
+    try {
+      const response = await fetch('/api/admin/manufacturers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(manufacturerForm),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Unable to create manufacturer');
+      setManufacturerForm({ companyName: '', name: '', email: '', password: '' });
+      setManufacturers((current) => [{ ...data.manufacturer, productCount: 0, verificationCount: 0 }, ...current]);
+      toast.success('Manufacturer account created. Share the initial password securely.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to create manufacturer');
+    } finally {
+      setIsCreatingManufacturer(false);
+    }
+  };
+  const handleVerify = async (codeOverride?: string, demoScenario?: 'tampered') => {
+    const code = (codeOverride ?? verifyCode).trim();
+    if (!code) return;
+    setVerifyCode(code);
     setIsVerifying(true);
     setScanning(true);
     setVerifyResult(null);
@@ -284,12 +358,13 @@ export default function Home() {
       const res = await fetch('/api/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ qrCode: verifyCode.trim() }),
+        body: JSON.stringify({ qrCode: code, ...(demoScenario ? { demoScenario } : {}) }),
       });
       const data = await res.json();
       if (!res.ok) {
         setVerifyResult({
           isAuthentic: false,
+          status: data.status,
           result: data.error || 'Verification could not be completed. Please try again.',
           product: null,
         });
@@ -297,9 +372,14 @@ export default function Home() {
         return;
       }
       setVerifyResult(data);
+      if (currentRole === 'MANUFACTURER') {
+        const dashboardResponse = await fetch('/api/manufacturer/dashboard');
+        if (dashboardResponse.ok) setManufacturerDashboard(await dashboardResponse.json());
+      }
     } catch (err) {
       setVerifyResult({
         isAuthentic: false,
+        status: 'INVALID',
         result: 'Verification failed. Please try again.',
         product: null,
       });
@@ -307,8 +387,27 @@ export default function Home() {
     setIsVerifying(false);
   };
 
+  useEffect(() => {
+    if (autoVerifyQueryHandled.current) return;
+    const qrCode = new URLSearchParams(window.location.search).get('qr')?.trim();
+    if (!qrCode) return;
+
+    autoVerifyQueryHandled.current = true;
+    setVerifyCode(qrCode);
+    void handleVerify(qrCode);
+  }, [handleVerify]);
+
+  const downloadProductQr = (product: ManufacturerDashboardData['products'][number]) => {
+    const link = document.createElement('a');
+    link.href = product.qrImageUrl;
+    link.download = `blockguard-${product.batchNo.replace(/[^a-z0-9_-]/gi, '_')}-qr.png`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
   const handleRegister = async () => {
-    if (!registerForm.name || !registerForm.category || !registerForm.manufacturer || !registerForm.batchNo) {
+    if (!registerForm.name || !registerForm.category || !registerForm.batchNo) {
       toast.error('Please fill in all required fields');
       return;
     }
@@ -324,8 +423,10 @@ export default function Home() {
       const data = await res.json();
       if (res.ok) {
         setRegisterSuccess(true);
-        setRegisterForm({ name: '', category: '', manufacturer: '', batchNo: '', description: '' });
-        await fetchData();
+        setRegisterForm({ name: '', category: '', batchNo: '', description: '' });
+        await fetchData(currentRole);
+        const dashboardResponse = await fetch('/api/manufacturer/dashboard');
+        if (dashboardResponse.ok) setManufacturerDashboard(await dashboardResponse.json());
         toast.success(`Block mined! Product "${data.name}" added to blockchain with QR: ${data.qrCode}`);
         setTimeout(() => setRegisterSuccess(false), 4000);
       } else {
@@ -344,9 +445,10 @@ export default function Home() {
   const navItems = [
     { id: 'home', label: 'Home' },
     { id: 'verify', label: 'Verify Product' },
-    ...(currentRole === 'ADMIN' || currentRole === 'MANUFACTURER' ? [{ id: 'register', label: 'Register' }] : []),
-    { id: 'blockchain', label: 'Blockchain' },
-    { id: 'dashboard', label: 'Dashboard' },
+    ...(currentRole === 'MANUFACTURER' ? [{ id: 'register', label: 'Register Product' }] : []),
+    ...(currentRole === 'ADMIN' ? [{ id: 'admin-dashboard', label: 'Admin Dashboard' }] : []),
+    ...(currentRole === 'MANUFACTURER' ? [{ id: 'blockchain', label: 'Blockchain' }] : []),
+    { id: 'dashboard', label: currentRole === 'ADMIN' ? 'Analytics' : currentRole === 'MANUFACTURER' ? 'Manufacturer Dashboard' : 'Customer Dashboard' },
   ];
 
   const scrollTo = (id: string) => {
@@ -357,12 +459,11 @@ export default function Home() {
   };
 
   // Quick-try codes
-  const quickCodes = products.length > 0
-    ? [
-        { label: 'Try Authentic', code: products[0].qrCode },
-        { label: 'Try Fake', code: 'FAKE-XXXX-YYYY-ZZZZ' },
-      ]
-    : [];
+  const demoProduct = products.find((product) => product.isDemo);
+  const quickCodes = [
+    ...(demoProduct ? [{ label: 'Try Demo Product', code: demoProduct.qrCode }] : []),
+    { label: 'Try Invalid QR', code: 'BPC-XXXX-XXXX-XXXX-XXXX' },
+  ];
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -394,7 +495,7 @@ export default function Home() {
               ))}
             </div>
             <div className="hidden md:flex items-center gap-3">
-              <Button variant="outline" size="sm" onClick={fetchData}>
+              <Button variant="outline" size="sm" onClick={() => fetchData(currentRole)}>
                 <RefreshCw className="w-4 h-4 mr-2" />
                 Refresh
               </Button>
@@ -495,7 +596,7 @@ export default function Home() {
               >
                 <Badge className="mb-4 bg-emerald-100 text-emerald-800 border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-900 dark:text-emerald-200">
                   <Zap className="w-3 h-3 mr-1" />
-                  Blockchain-Powered Authentication
+                  Blockchain Record Verification
                 </Badge>
                 <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-gray-900 dark:text-white leading-tight">
                   Detect{' '}
@@ -505,25 +606,27 @@ export default function Home() {
                   with Blockchain Technology
                 </h1>
                 <p className="mt-6 text-lg text-gray-600 dark:text-gray-300 max-w-xl leading-relaxed">
-                  BlockGuard leverages the power of decentralized blockchain to create an immutable product
-                  registry. Every authentic product is recorded on the chain, enabling instant verification
-                  and eliminating counterfeit goods from the supply chain.
+                  BlockGuard stores product registration records in a hash-linked ledger. Verification checks
+                  whether a submitted code matches a stored record and its integrity data; it cannot establish
+                  a real-world brand partnership or prove the physical item's origin.
                 </p>
                 <div className="mt-8 flex flex-wrap gap-4">
                   <Button size="lg" className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-200 dark:shadow-emerald-900/30" onClick={() => scrollTo('verify')}>
                     <Search className="w-5 h-5 mr-2" />
                     Verify a Product
                   </Button>
-                  <Button size="lg" variant="outline" onClick={() => scrollTo('blockchain')}>
-                    <Link2 className="w-5 h-5 mr-2" />
-                    Explore Blockchain
-                    <ChevronRight className="w-4 h-4 ml-1" />
-                  </Button>
+                  {(currentRole === 'ADMIN' || currentRole === 'MANUFACTURER') && (
+                    <Button size="lg" variant="outline" onClick={() => scrollTo('blockchain')}>
+                      <Link2 className="w-5 h-5 mr-2" />
+                      Explore Blockchain
+                      <ChevronRight className="w-4 h-4 ml-1" />
+                    </Button>
+                  )}
                 </div>
                 <div className="mt-10 flex items-center gap-8 text-sm text-gray-500 dark:text-gray-400">
                   <div className="flex items-center gap-2">
                     <Shield className="w-4 h-4 text-emerald-500" />
-                    <span>Immutable Records</span>
+                    <span>Hash-Linked Records</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Clock className="w-4 h-4 text-emerald-500" />
@@ -595,8 +698,8 @@ export default function Home() {
                 Simple 4-Step Verification Process
               </h2>
               <p className="mt-4 text-gray-500 dark:text-gray-400 max-w-2xl mx-auto">
-                Our blockchain-based system makes product authentication incredibly simple for both
-                manufacturers and consumers.
+              Our blockchain-based system checks product registration records for both
+              manufacturers and consumers.
               </p>
             </motion.div>
             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-8">
@@ -604,25 +707,25 @@ export default function Home() {
                 {
                   icon: <Package className="w-8 h-8" />,
                   title: 'Product Registration',
-                  desc: 'Manufacturers register products on the blockchain with unique QR codes, batch numbers, and cryptographic hashes that become permanently embedded in the chain.',
+                  desc: 'Manufacturers register product records with unique QR codes, batch numbers, and cryptographic hashes linked into the application ledger.',
                   step: '01',
                 },
                 {
                   icon: <QrCode className="w-8 h-8" />,
                   title: 'QR Code Generation',
-                  desc: 'Each registered product receives a unique blockchain-verified QR code that contains the product\'s digital fingerprint and links directly to its blockchain record.',
+                  desc: 'Each registered product receives a unique QR code linked to its product record and fingerprint in the application ledger.',
                   step: '02',
                 },
                 {
                   icon: <Search className="w-8 h-8" />,
                   title: 'Consumer Scanning',
-                  desc: 'Consumers simply scan or enter the QR code found on the product packaging through our verification system to instantly authenticate the product.',
+                  desc: 'Consumers can scan or enter a QR code to check whether it matches a product record in the application.',
                   step: '03',
                 },
                 {
                   icon: <Shield className="w-8 h-8" />,
                   title: 'Instant Verification',
-                  desc: 'The system cross-references the QR code against the blockchain ledger. Results are displayed within seconds confirming if the product is authentic or counterfeit.',
+                  desc: 'The system checks the QR code, product fingerprint, and ledger integrity. A matching record does not prove the physical item is genuine or brand-authorized.',
                   step: '04',
                 },
               ].map((item, i) => (
@@ -676,10 +779,10 @@ export default function Home() {
               {[
                 { icon: <Lock className="w-6 h-6" />, title: 'Tamper-Proof Records', desc: 'Every product entry is cryptographically sealed in a block, making it impossible to alter or delete records without detection.' },
                 { icon: <Eye className="w-6 h-6" />, title: 'Full Transparency', desc: 'Access the complete product history, from manufacturing to point of sale. Every transaction is visible and verifiable.' },
-                { icon: <BarChart3 className="w-6 h-6" />, title: 'Real-Time Analytics', desc: 'Track verification statistics, identify counterfeit hotspots, and monitor the health of the product authentication network.' },
+                { icon: <BarChart3 className="w-6 h-6" />, title: 'Verification Activity', desc: 'Review aggregate verification statistics and monitor the health of the product record ledger.' },
                 { icon: <Fingerprint className="w-6 h-6" />, title: 'Digital Fingerprinting', desc: 'Each product receives a unique cryptographic hash that serves as its digital identity on the blockchain.' },
                 { icon: <Factory className="w-6 h-6" />, title: 'Manufacturer Portal', desc: 'Seamless product registration system for manufacturers to add new products to the blockchain with complete traceability.' },
-                { icon: <AlertTriangle className="w-6 h-6" />, title: 'Counterfeit Detection', desc: 'Advanced algorithms detect patterns in counterfeit attempts and alert authorities about suspicious verification activities.' },
+                { icon: <AlertTriangle className="w-6 h-6" />, title: 'Record Mismatch Detection', desc: 'Identify QR codes or product details that do not match registered product records and ledger data.' },
               ].map((item, i) => (
                 <motion.div
                   key={i}
@@ -719,7 +822,7 @@ export default function Home() {
                 Product Verification
               </Badge>
               <h2 className="text-3xl sm:text-4xl font-bold text-gray-900 dark:text-white">
-                Is Your Product Authentic?
+              Check a Product Record
               </h2>
               <p className="mt-4 text-gray-500 dark:text-gray-400 max-w-xl mx-auto">
                 Enter the QR code found on your product to instantly verify its authenticity
@@ -781,7 +884,7 @@ export default function Home() {
                     </div>
                     <Button
                       className="h-12 px-8 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
-                      onClick={handleVerify}
+                      onClick={() => handleVerify()}
                       disabled={isVerifying || !verifyCode.trim()}
                     >
                       {isVerifying ? (
@@ -807,7 +910,7 @@ export default function Home() {
                   {quickCodes.length > 0 && (
                     <div className="mt-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200 dark:bg-emerald-950 dark:border-emerald-800">
                       <p className="text-xs text-emerald-700 dark:text-emerald-300 font-medium mb-2">
-                        Quick Demo — click a code below to test:
+                        Demo checks — records are illustrative and not brand-authorized:
                       </p>
                       <div className="flex flex-wrap gap-2">
                         {quickCodes.map((qc, i) => (
@@ -815,12 +918,12 @@ export default function Home() {
                             key={i}
                             onClick={() => { setVerifyCode(qc.code); }}
                             className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-colors ${
-                              qc.label === 'Try Fake'
+                              qc.label === 'Try Invalid QR'
                                 ? 'border-red-300 bg-white text-red-600 hover:bg-red-50 dark:border-red-800 dark:bg-gray-900'
                                 : 'border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:bg-gray-900'
                             }`}
                           >
-                            {qc.label === 'Try Fake' ? 'X' : '✓'} {qc.label}: {qc.code}
+                            {qc.label === 'Try Invalid QR' ? 'X' : '✓'} {qc.label}: {qc.code}
                           </button>
                         ))}
                       </div>
@@ -856,13 +959,14 @@ export default function Home() {
                               <h3 className={`text-lg font-bold ${
                                 verifyResult.isAuthentic ? 'text-emerald-800 dark:text-emerald-200' : 'text-red-800 dark:text-red-200'
                               }`}>
-                                {verifyResult.isAuthentic ? 'AUTHENTIC PRODUCT' : 'COUNTERFEIT DETECTED'}
+                                {verifyResult.status === 'AUTHENTIC' ? 'REGISTERED RECORD MATCH' : verifyResult.status === 'TAMPERED' ? 'RECORD MISMATCH' : 'INVALID QR CODE'}
                               </h3>
                               <p className={`text-sm mt-1 ${
                                 verifyResult.isAuthentic ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
                               }`}>
                                 {verifyResult.result}
                               </p>
+                              {verifyResult.product?.isDemo && <div className="mt-3"><Badge variant="outline" className="border-amber-500 text-amber-700">DEMO DATA · NOT BRAND AUTHORIZED</Badge></div>}
                               {verifyResult.product && (
                                 <div className="mt-4 grid grid-cols-2 gap-3">
                                   {[
@@ -870,22 +974,12 @@ export default function Home() {
                                     { label: 'Category', value: verifyResult.product.category },
                                     { label: 'Manufacturer', value: verifyResult.product.manufacturer },
                                     { label: 'Batch No', value: verifyResult.product.batchNo },
-                                    { label: 'Times Verified', value: String(verifyResult.product.verifiedCount) },
-                                    { label: 'Registered', value: new Date(verifyResult.product.createdAt).toLocaleDateString() },
                                   ].map((field, j) => (
                                     <div key={j}>
                                       <p className="text-xs text-gray-500 uppercase tracking-wide">{field.label}</p>
                                       <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{field.value}</p>
                                     </div>
                                   ))}
-                                </div>
-                              )}
-                              {verifyResult.isAuthentic && verifyResult.product && (
-                                <div className="mt-4 p-3 bg-white/50 dark:bg-black/20 rounded-lg border border-emerald-200 dark:border-emerald-800">
-                                  <p className="text-xs text-gray-500">Blockchain Hash</p>
-                                  <p className="text-xs font-mono text-emerald-700 dark:text-emerald-300 mt-1 break-all">
-                                    {verifyResult.product.blockchainHash}
-                                  </p>
                                 </div>
                               )}
                             </div>
@@ -901,7 +995,7 @@ export default function Home() {
         </section>
 
         {/* ═══════ REGISTER PRODUCT ═══════ */}
-        {(currentRole === 'ADMIN' || currentRole === 'MANUFACTURER') && <section id="register" className="py-20 bg-gray-50 dark:bg-gray-900">
+        {currentRole === 'MANUFACTURER' && <section id="register" className="py-20 bg-gray-50 dark:bg-gray-900">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -960,12 +1054,10 @@ export default function Home() {
                       </Select>
                     </div>
                     <div className="space-y-2">
-                      <Label>Manufacturer *</Label>
-                      <Input
-                        placeholder="e.g., TechCorp Industries"
-                        value={registerForm.manufacturer}
-                        onChange={e => setRegisterForm(prev => ({ ...prev, manufacturer: e.target.value }))}
-                      />
+                      <Label>Manufacturer</Label>
+                      <p className="rounded-md border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+                        Your registered manufacturer account
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Label>Batch Number *</Label>
@@ -993,7 +1085,6 @@ export default function Home() {
                         isRegistering ||
                         !registerForm.name ||
                         !registerForm.category ||
-                        !registerForm.manufacturer ||
                         !registerForm.batchNo
                       }
                     >
@@ -1011,7 +1102,7 @@ export default function Home() {
                         </>
                       )}
                     </Button>
-                    <Button variant="outline" onClick={() => setRegisterForm({ name: '', category: '', manufacturer: '', batchNo: '', description: '' })}>
+                    <Button variant="outline" onClick={() => setRegisterForm({ name: '', category: '', batchNo: '', description: '' })}>
                       Clear
                     </Button>
                   </div>
@@ -1026,7 +1117,7 @@ export default function Home() {
                         <div className="flex items-center gap-2">
                           <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                           <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">
-                            Product successfully registered on the blockchain! A new block has been mined and added to the chain. Check the Blockchain Explorer to see it.
+                            Product registration record and integrity hash were added to the ledger.
                           </p>
                         </div>
                       </motion.div>
@@ -1068,13 +1159,15 @@ export default function Home() {
                 Explore the Chain
               </h2>
               <p className="mt-4 text-gray-500 dark:text-gray-400 max-w-xl mx-auto">
-                Browse all blocks in the product verification blockchain. Click on any block to see detailed information.
+                {(currentRole === 'ADMIN' || currentRole === 'MANUFACTURER')
+                  ? 'Browse the ledger blocks available to your account. Click a block to inspect its integrity data.'
+                  : 'The ledger explorer is available to administrators and registered manufacturers. Public visitors can verify a product record below.'}
               </p>
             </motion.div>
 
               {/* ADMIN DASHBOARD */}
               {currentRole === 'ADMIN' && (
-                <div className="mb-10 space-y-6">
+                <div id="admin-dashboard" className="mb-10 scroll-mt-24 space-y-6">
                   <div className="flex items-center justify-between">
                     <div>
                       <Badge className="bg-purple-100 text-purple-800">
@@ -1106,8 +1199,9 @@ export default function Home() {
                         { label: 'Active Manufacturers', value: adminStats.users.activeManufacturers },
                         { label: 'Registered Products', value: adminStats.products.total },
                         { label: 'Total Verifications', value: adminStats.verifications.total },
-                        { label: 'Authentic Results', value: adminStats.verifications.authentic },
-                        { label: 'Fake Results', value: adminStats.verifications.fake },
+                        { label: 'Record Matches', value: adminStats.verifications.authentic },
+                        { label: 'Invalid Results', value: adminStats.verifications.fake },
+                        { label: 'Ledger Integrity', value: adminStats.ledgerIntegrity ? 'Valid' : 'Alert' },
                       ].map((item) => (
                         <Card key={item.label}>
                           <CardContent className="p-5">
@@ -1136,6 +1230,57 @@ export default function Home() {
                     </CardHeader>
 
                     <CardContent>
+                      <form onSubmit={handleCreateManufacturer} className="mb-6 grid gap-3 rounded-lg border bg-muted/20 p-4 sm:grid-cols-2">
+                        <h4 className="font-semibold sm:col-span-2">Create manufacturer account</h4>
+                        <Input
+                          aria-label="Company name"
+                          placeholder="Company name (enter Demo Manufacturer — BlockGuard Showcase for test demo data)"
+                          value={manufacturerForm.companyName}
+                          onChange={(event) => setManufacturerForm((current) => ({ ...current, companyName: event.target.value }))}
+                          required
+                          maxLength={150}
+                        />
+                        <Input
+                          aria-label="Contact person's name"
+                          placeholder="Contact person's name"
+                          value={manufacturerForm.name}
+                          onChange={(event) => setManufacturerForm((current) => ({ ...current, name: event.target.value }))}
+                          required
+                          maxLength={100}
+                        />
+                        <Input
+                          aria-label="Manufacturer email"
+                          type="email"
+                          placeholder="Contact email"
+                          value={manufacturerForm.email}
+                          onChange={(event) => setManufacturerForm((current) => ({ ...current, email: event.target.value }))}
+                          required
+                          maxLength={254}
+                          autoComplete="email"
+                        />
+                        <Input
+                          aria-label="Initial manufacturer password"
+                          type="password"
+                          placeholder="Initial password (12+ characters)"
+                          value={manufacturerForm.password}
+                          onChange={(event) => setManufacturerForm((current) => ({ ...current, password: event.target.value }))}
+                          required
+                          minLength={12}
+                          maxLength={128}
+                          autoComplete="new-password"
+                        />
+                        <Button type="submit" disabled={isCreatingManufacturer} className="sm:col-span-2 sm:justify-self-start">
+                          {isCreatingManufacturer ? 'Creating account…' : 'Create manufacturer'}
+                        </Button>
+                      </form>
+                      {process.env.NODE_ENV !== 'production' && (
+                        <div className="mb-6 flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                          <span>Demo setup is restricted server-side to the Neon testing branch.</span>
+                          <Button type="button" variant="outline" disabled={isSeeding} onClick={seedDatabase}>
+                            {isSeeding ? 'Preparing demo data…' : 'Prepare showcase products'}
+                          </Button>
+                        </div>
+                      )}
                       {manufacturers.length === 0 ? (
                         <p className="text-sm text-gray-500 text-center py-6">
                           No manufacturer accounts found.
@@ -1149,11 +1294,13 @@ export default function Home() {
                             >
                               <div>
                                 <p className="font-semibold">
-                                  {manufacturer.name}
+                                  {manufacturer.companyName || manufacturer.name}
                                 </p>
+                                <p className="text-sm text-gray-500">Contact: {manufacturer.name}</p>
                                 <p className="text-sm text-gray-500">
                                   {manufacturer.email}
                                 </p>
+                                <p className="text-xs text-gray-400 mt-1">{manufacturer.productCount} registered products</p>
                                 <p className="text-xs text-gray-400 mt-1">
                                   Joined: {new Date(manufacturer.createdAt).toLocaleDateString()}
                                 </p>
@@ -1199,7 +1346,7 @@ export default function Home() {
                 <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
                   Chain Integrity: {stats.chainIntegrity ? 'VALID' : 'COMPROMISED'}
                 </span>
-                <span className="text-sm text-gray-400">| {blocks.length} blocks</span>
+                <span className="text-sm text-gray-400">| {stats.totalBlocks} blocks</span>
               </div>
             )}
 
@@ -1306,9 +1453,12 @@ export default function Home() {
                               <CardTitle className="text-base">{product.name}</CardTitle>
                               <CardDescription className="mt-1">{product.manufacturer}</CardDescription>
                             </div>
-                            <Badge className={product.isVerified ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}>
-                              {product.isVerified ? 'Verified' : 'Pending'}
-                            </Badge>
+                            <div className="flex flex-col items-end gap-1">
+                              {product.isDemo && <Badge variant="outline" className="border-amber-500 text-amber-700">DEMO DATA</Badge>}
+                              <Badge className={product.isVerified ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}>
+                                {product.isVerified ? 'Record checked' : 'Not checked'}
+                              </Badge>
+                            </div>
                           </div>
                         </CardHeader>
                         <CardContent className="space-y-2">
@@ -1333,10 +1483,6 @@ export default function Home() {
                             <span className="text-gray-500">Verifications</span>
                             <span className="font-medium">{product.verifiedCount}</span>
                           </div>
-                          <Separator className="my-2" />
-                          <p className="text-xs text-gray-400 font-mono break-all">
-                            {product.blockchainHash.substring(0, 32)}...
-                          </p>
                         </CardContent>
                       </Card>
                     </motion.div>
@@ -1358,15 +1504,21 @@ export default function Home() {
             >
               <Badge variant="secondary" className="mb-4">
                 <BarChart3 className="w-3 h-3 mr-1" />
-                Dashboard
+                {currentRole === 'ADMIN' ? 'Analytics' : currentRole === 'MANUFACTURER' ? 'Manufacturer Dashboard' : 'Customer Dashboard'}
               </Badge>
               <h2 className="text-3xl sm:text-4xl font-bold text-gray-900 dark:text-white">
-                Network Analytics
+                {currentRole === 'ADMIN' ? 'Platform Analytics' : currentRole === 'MANUFACTURER' ? 'Manufacturer Overview' : 'Customer Overview'}
               </h2>
               <p className="mt-4 text-gray-500 dark:text-gray-400 max-w-xl mx-auto">
                 Real-time statistics and insights about the product verification blockchain network.
               </p>
             </motion.div>
+
+            {currentAccount && (
+              <p className="-mt-8 mb-8 text-center text-sm text-muted-foreground">
+                Signed in as {currentAccount.name || currentAccount.email}{currentAccount.name && currentAccount.email ? ` · ${currentAccount.email}` : ''}
+              </p>
+            )}
 
             {currentRole === 'MANUFACTURER' && (
               <div className="mb-10 space-y-6">
@@ -1374,7 +1526,7 @@ export default function Home() {
                   <div>
                     <Badge className="bg-emerald-100 text-emerald-800">Manufacturer Portal</Badge>
                     <h3 className="text-2xl font-bold mt-2">Manufacturer Dashboard</h3>
-                    <p className="text-sm text-gray-500 mt-1">Products and verification activity for your account.</p>
+                  <p className="text-sm text-gray-500 mt-1">{manufacturerDashboard?.companyName || 'Your manufacturer account'} — products and verification activity.</p>
                   </div>
                   {manufacturerLoading && <RefreshCw className="w-5 h-5 animate-spin text-emerald-600" />}
                 </div>
@@ -1387,8 +1539,8 @@ export default function Home() {
                     {[
                       { label: 'Registered Products', value: manufacturerDashboard.statistics.totalProducts },
                       { label: 'Verification Attempts', value: manufacturerDashboard.statistics.totalVerifications },
-                      { label: 'Authentic Results', value: manufacturerDashboard.statistics.authenticVerifications },
-                      { label: 'Fake Results', value: manufacturerDashboard.statistics.fakeVerifications },
+                      { label: 'Record Matches', value: manufacturerDashboard.statistics.authenticVerifications },
+                      { label: 'Invalid or Tampered', value: manufacturerDashboard.statistics.fakeVerifications },
                     ].map((item) => <Card key={item.label}><CardContent className="p-5">
                       <p className="text-xs text-gray-500 uppercase tracking-wide">{item.label}</p>
                       <p className="text-2xl font-bold mt-2">{item.value}</p>
@@ -1398,10 +1550,15 @@ export default function Home() {
                     <CardHeader><CardTitle>Your Registered Products</CardTitle><CardDescription>Products registered by your manufacturer account.</CardDescription></CardHeader>
                     <CardContent>
                       {manufacturerDashboard.products.length === 0 ? <p className="text-sm text-gray-500 text-center py-6">No products registered yet. Use the Register section to add products.</p> :
-                        <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm text-left">
-                          <thead><tr className="border-b text-gray-500"><th className="py-3 pr-4">Product</th><th className="py-3 pr-4">Category</th><th className="py-3 pr-4">Batch</th><th className="py-3 pr-4">QR Code</th><th className="py-3 pr-4">Registered</th><th className="py-3">Verifications</th></tr></thead>
+                        <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-sm text-left">
+                          <thead><tr className="border-b text-gray-500"><th className="py-3 pr-4">Product</th><th className="py-3 pr-4">Category</th><th className="py-3 pr-4">Batch</th><th className="py-3 pr-4">Product QR</th><th className="py-3 pr-4">Registered</th><th className="py-3">Verification activity</th></tr></thead>
                           <tbody>{manufacturerDashboard.products.map(product => <tr key={product.id} className="border-b last:border-0">
-                            <td className="py-3 pr-4 font-medium">{product.name}</td><td className="py-3 pr-4">{product.category}</td><td className="py-3 pr-4">{product.batchNo}</td><td className="py-3 pr-4 font-mono">{product.qrCode}</td><td className="py-3 pr-4">{new Date(product.createdAt).toLocaleDateString()}</td><td className="py-3">{product.verificationCount}</td>
+                            <td className="py-3 pr-4 font-medium">{product.name} {product.isDemo && <Badge variant="outline">DEMO DATA</Badge>}</td><td className="py-3 pr-4">{product.category}</td><td className="py-3 pr-4">{product.batchNo}</td><td className="py-3 pr-4">
+                              <img src={product.qrImageUrl} alt={`QR code for ${product.name}`} width={144} height={144} loading="lazy" decoding="async" className="h-36 w-36 rounded border bg-white p-1" />
+                              <p className="mt-1 max-w-40 break-all font-mono text-xs">{product.qrCode}</p>
+                              <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => downloadProductQr(product)}>Download QR PNG</Button>
+                              <a className="mt-2 block text-xs text-emerald-700 underline" href={product.verificationUrl} target="_blank" rel="noreferrer">Open verification link</a>
+                            </td><td className="py-3 pr-4">{new Date(product.createdAt).toLocaleDateString()}</td><td className="py-3"><span>{product.verificationCount} total</span><p className="text-xs text-muted-foreground">{product.authenticVerificationCount} record matches · {product.invalidVerificationCount} invalid/tampered</p>{product.isDemo && <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => { scrollTo('verify'); void handleVerify(product.qrCode, 'tampered'); }}>Demo tampering check</Button>}</td>
                           </tr>)}</tbody>
                         </table></div>}
                     </CardContent>
@@ -1418,7 +1575,7 @@ export default function Home() {
                     { label: 'Products Registered', value: stats.totalProducts, icon: <Package className="w-5 h-5" />, color: 'emerald' },
                     { label: 'Blocks Mined', value: stats.totalBlocks, icon: <Database className="w-5 h-5" />, color: 'blue' },
                     { label: 'Total Verifications', value: stats.totalVerifications, icon: <Search className="w-5 h-5" />, color: 'purple' },
-                    { label: 'Fakes Detected', value: stats.fakeVerifications, icon: <AlertTriangle className="w-5 h-5" />, color: 'red' },
+                    { label: 'Invalid Results', value: stats.fakeVerifications, icon: <AlertTriangle className="w-5 h-5" />, color: 'red' },
                   ].map((stat, i) => (
                     <motion.div
                       key={i}
@@ -1460,7 +1617,7 @@ export default function Home() {
                       <div className="space-y-4">
                         <div>
                           <div className="flex justify-between text-sm mb-1">
-                            <span className="text-gray-600 dark:text-gray-400">Authentic Products</span>
+                            <span className="text-gray-600 dark:text-gray-400">Record Matches</span>
                             <span className="font-semibold text-emerald-600">{stats.authenticVerifications}</span>
                           </div>
                           <Progress
@@ -1470,7 +1627,7 @@ export default function Home() {
                         </div>
                         <div>
                           <div className="flex justify-between text-sm mb-1">
-                            <span className="text-gray-600 dark:text-gray-400">Counterfeit Detected</span>
+                            <span className="text-gray-600 dark:text-gray-400">Invalid Results</span>
                             <span className="font-semibold text-red-600">{stats.fakeVerifications}</span>
                           </div>
                           <Progress
@@ -1480,7 +1637,7 @@ export default function Home() {
                         </div>
                         {stats.totalVerifications > 0 && (
                           <div className="mt-4 p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800">
-                            <p className="text-xs text-gray-500">Authenticity Rate</p>
+                            <p className="text-xs text-gray-500">Record Match Rate</p>
                             <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">
                               {((stats.authenticVerifications / stats.totalVerifications) * 100).toFixed(1)}%
                             </p>
@@ -1562,7 +1719,7 @@ export default function Home() {
                 </CardHeader>
                 <CardContent className="space-y-4 text-sm text-gray-600 dark:text-gray-400 leading-relaxed">
                   <p>
-                    Each product registered in our system is stored as a &ldquo;block&rdquo; on the blockchain. A block contains
+                    Each product registered in our system is stored as a &ldquo;block&rdquo; in the application ledger. A block contains
                     essential product data including the product name, manufacturer details, batch number, and a unique QR
                     code. This data is combined with a cryptographic hash of the previous block, creating an unbreakable chain
                     where each block is intrinsically linked to its predecessor.
@@ -1571,11 +1728,11 @@ export default function Home() {
                     The hash function used ensures that any attempt to modify the data in a block would result in a completely
                     different hash value, immediately revealing tampering. Additionally, the &ldquo;nonce&rdquo; value used in the mining
                     process adds an extra layer of computational security, making it prohibitively expensive for bad actors to
-                    rewrite the chain.
+                    alter records without being detected by the integrity check.
                   </p>
                   <p>
-                    This means that once a product is registered, its record becomes permanent and immutable. Consumers can
-                    trust that the verification results they receive are accurate and have not been manipulated by any party.
+                    The ledger integrity check can reveal changes to the stored chain. This application-level ledger does not
+                    establish brand authorization or prove the origin or condition of a physical item.
                   </p>
                 </CardContent>
               </Card>
@@ -1588,10 +1745,10 @@ export default function Home() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {[
-                    { title: 'For Consumers', desc: 'Instant product authentication, protection from counterfeit goods, and confidence in purchase decisions through transparent blockchain verification.' },
-                    { title: 'For Manufacturers', desc: 'Brand protection, reduced revenue loss from counterfeits, enhanced consumer trust, and real-time visibility into product verification across the supply chain.' },
-                    { title: 'For Regulators', desc: 'Access to an immutable product registry, simplified compliance auditing, and the ability to trace products back to their origin with complete transparency.' },
-                    { title: 'For Retailers', desc: 'Streamlined inventory authentication, reduced liability from selling counterfeit products, and improved customer satisfaction through verified authentic products.' },
+                    { title: 'For Consumers', desc: 'Check whether a submitted code matches a product record and whether the stored ledger passes its integrity check.' },
+                    { title: 'For Manufacturers', desc: 'Register products under a manufacturer account and review aggregate verification activity for owned records.' },
+                    { title: 'For Regulators', desc: 'Review product registration records and ledger integrity information available through authorized accounts.' },
+                    { title: 'For Retailers', desc: 'Check product codes against registered records while considering physical inspection and independent brand authorization separately.' },
                   ].map((item, i) => (
                     <div key={i} className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900 border">
                       <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">{item.title}</h4>
@@ -1624,8 +1781,8 @@ export default function Home() {
               <h4 className="font-semibold text-gray-900 dark:text-white mb-3">Platform</h4>
               <ul className="space-y-2 text-sm text-gray-500 dark:text-gray-400">
                 <li><button onClick={() => scrollTo('verify')} className="hover:text-emerald-600 transition-colors">Verify Product</button></li>
-                <li><button onClick={() => scrollTo('register')} className="hover:text-emerald-600 transition-colors">Register Product</button></li>
-                <li><button onClick={() => scrollTo('blockchain')} className="hover:text-emerald-600 transition-colors">Blockchain Explorer</button></li>
+                {currentRole === 'MANUFACTURER' && <li><button onClick={() => scrollTo('register')} className="hover:text-emerald-600 transition-colors">Register Product</button></li>}
+                {(currentRole === 'ADMIN' || currentRole === 'MANUFACTURER') && <li><button onClick={() => scrollTo(currentRole === 'ADMIN' ? 'admin-dashboard' : 'blockchain')} className="hover:text-emerald-600 transition-colors">{currentRole === 'ADMIN' ? 'Manufacturer Management' : 'Blockchain Explorer'}</button></li>}
                 <li><button onClick={() => scrollTo('dashboard')} className="hover:text-emerald-600 transition-colors">Dashboard</button></li>
               </ul>
             </div>
@@ -1657,7 +1814,7 @@ export default function Home() {
               <div className={`w-2 h-2 rounded-full ${stats?.chainIntegrity ? 'bg-emerald-500' : 'bg-red-500'}`} />
               Chain Status: {stats?.chainIntegrity ? 'Healthy' : 'Alert'}
               <span className="mx-1">|</span>
-              Network: {blocks.length} blocks
+              Network: {stats?.totalBlocks ?? 0} blocks
             </div>
           </div>
         </div>

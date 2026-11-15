@@ -23,6 +23,7 @@ export async function requireRole(allowedRoles: string[]) {
           id: true;
           name: true;
           email: true;
+          companyName: true;
           role: true;
           isActive: true;
         };
@@ -30,6 +31,7 @@ export async function requireRole(allowedRoles: string[]) {
         id: string;
         name: string | null;
         email: string | null;
+        companyName: string | null;
         role: string;
         isActive: boolean;
       } | null>;
@@ -40,6 +42,7 @@ export async function requireRole(allowedRoles: string[]) {
       id: true,
       name: true,
       email: true,
+      companyName: true,
       role: true,
       isActive: true,
     },

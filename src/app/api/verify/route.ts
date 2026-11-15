@@ -28,15 +28,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const simulateTampering = body?.demoScenario === 'tampered';
+    if (simulateTampering && process.env.BLOCKGUARD_DATABASE_ENV !== 'test') {
+      return NextResponse.json({ error: 'Demo tampering simulation is available only on the testing database.' }, { status: 404 });
+    }
+
     // Find the registered product
     const product = await db.product.findUnique({
       where: { qrCode },
     });
 
     let isAuthentic = false;
+    let status: 'AUTHENTIC' | 'INVALID' | 'TAMPERED' = 'INVALID';
     let result = 'Product not found in the registration database.';
 
     if (product) {
+      if (simulateTampering && !product.isDemo) {
+        return NextResponse.json(
+          { error: 'Tampering simulation only works with clearly marked demo products.' },
+          { status: 400 }
+        );
+      }
+      status = 'TAMPERED';
       // Retrieve the complete ledger in block order
       const storedBlocks = await db.block.findMany({
         orderBy: { index: 'asc' },
@@ -67,13 +80,18 @@ export async function POST(request: NextRequest) {
         if (!productBlock) {
           result = 'Product registration record is missing from the ledger.';
         } else {
-          if (isAuthenticProductRecord(product, productBlock, chainResult.valid)) {
+          const checkedProduct = simulateTampering && product.isDemo
+            ? { ...product, name: `${product.name} (tampered demo copy)` }
+            : product;
+          if (isAuthenticProductRecord(checkedProduct, productBlock, chainResult.valid)) {
             isAuthentic = true;
-
-            result = `Product "${product.name}" (Batch: ${product.batchNo}) has been successfully authenticated. Its registration fingerprint and blockchain ledger are valid.`;
+            status = 'AUTHENTIC';
+            result = 'The QR code matches a product record stored in BlockGuard and its ledger. This confirms record consistency only; it does not prove brand partnership or the physical item’s origin.';
           } else {
-            result =
-              'Product information or registration fingerprint does not match its ledger record. Authenticity could not be confirmed.';
+            status = 'TAMPERED';
+            result = simulateTampering && product.isDemo
+              ? 'DEMO DATA: a tampered in-memory copy failed the record check. No product or ledger record was changed.'
+              : 'Product information or registration fingerprint does not match its ledger record.';
           }
         }
       }
@@ -107,9 +125,19 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       isAuthentic,
+      status,
       result,
-      product: isAuthentic ? product : null,
+      product: isAuthentic && product ? {
+        name: product.name,
+        category: product.category,
+        manufacturer: product.manufacturer,
+        batchNo: product.batchNo,
+        description: product.description,
+        isDemo: product.isDemo,
+      } : null,
       timestamp: new Date().toISOString(),
+    }, {
+      headers: { 'Cache-Control': 'no-store' },
     });
   } catch (error: unknown) {
     console.error('Product verification failed:', error);
