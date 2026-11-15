@@ -1,202 +1,217 @@
-# 🔐 BlockGuard – Fake Product Detection Using Blockchain
+# BlockGuard — Blockchain-Based Product Authenticity Verification
 
-**BlockGuard** is a QR-code-based product authentication system designed to help consumers identify potentially counterfeit products. It uses product registration, unique QR codes and a custom blockchain-inspired ledger to record product information and support verification.
+**Verify authenticity. Build trust. Prevent counterfeit products.**
 
-The project demonstrates how blockchain concepts can be applied to product authentication and supply-chain transparency.
+BlockGuard is a web-based product authenticity verification platform that helps manufacturers register products and allows customers to verify whether a product is genuine using a unique QR code.
+
+It uses a custom SHA-256 hash-linked ledger to maintain product verification records and detect unauthorized modifications, providing a transparent and tamper-evident verification process.
+
+🌐 **Live Demo:** https://block-guard-mauve.vercel.app/  
+💻 **GitHub Repository:** https://github.com/YaassinMD/BlockGuard
+
+---
 
 ## 🚀 Key Features
 
-- **Product Registration:** Manufacturers can register products with details such as product name, category, manufacturer and batch number.
-- **QR Code Generation:** Generates a unique QR code for every registered product.
-- **Product Verification:** Consumers can verify a product using its QR code.
-- **Blockchain-Based Record Keeping:** Stores product registration records in a linked-block ledger.
-- **Chain Explorer:** View recorded blocks, hashes and previous-hash relationships.
-- **Verification Tracking:** Records product verification attempts and their results.
-- **Analytics Dashboard:** Displays product and verification statistics.
+- **QR-Based Product Verification:** Generate unique QR codes for registered products so customers can verify authenticity.
+- **SHA-256 Product Fingerprinting:** Generate cryptographic hashes to identify product records.
+- **Hash-Linked Ledger:** Maintain sequential records linked through cryptographic hashes.
+- **Ledger Integrity Verification:** Detect modifications or inconsistencies in the verification chain.
+- **Role-Based Access Control:** Separate access and functionality for administrators, manufacturers, and customers.
+- **Manufacturer Management:** Administrators can create and manage manufacturer accounts.
+- **Product Management:** Manufacturers can register and manage their own products.
+- **Public Verification:** Customers can verify products without creating an account.
+- **Verification History:** Maintain records of product verification activity.
+- **Secure Authentication:** Authentication and server-side authorization protect restricted operations.
 
-## 🛠️ Tech Stack
+## 👥 User Roles
 
-| Technology | Purpose |
+| Role | Capabilities |
 |---|---|
-| Next.js 16 | Full-stack web framework |
-| React 19 | User interface |
-| TypeScript | Type-safe development |
-| Tailwind CSS | Styling |
-| shadcn/ui & Radix UI | UI components |
-| Prisma ORM | Database operations |
-| SQLite | Database |
-| Node.js | Runtime environment |
+| Admin | Manage manufacturers, view products, monitor platform statistics and ledger integrity. |
+| Manufacturer | Register products, generate QR codes, and manage their own products. |
+| Customer | Scan QR codes and verify product authenticity without logging in. |
+
+## 🔄 How It Works
+
+1. **Manufacturer Creation:** The administrator creates a manufacturer account.
+2. **Product Registration:** The manufacturer logs in and registers a product.
+3. **Product Fingerprinting:** The system generates a SHA-256 fingerprint for the product.
+4. **Ledger Entry:** A new record is added to the hash-linked ledger.
+5. **QR Generation:** The system generates a unique QR code for the registered product.
+6. **Customer Verification:** A customer scans the QR code to access the verification page.
+7. **Authenticity Check:** The system checks the product record and its associated ledger information.
+8. **Result:** The customer receives the verification result.
 
 ## 🏗️ System Architecture
 
-The application follows this general workflow:
-
-1. Manufacturer enters product information.
-2. The application generates a unique product QR code.
-3. Product information is recorded in the database and custom blockchain ledger.
-4. Consumer scans or enters the QR code.
-5. The system checks whether the product is registered.
-6. The verification result is displayed and recorded.
-
 ```text
-       Manufacturer
-             |
-             v
-     Product Registration
-             |
-             v
-       QR Code Generation
-             |
-             v
-      Product Database
-             |
-             v
-     Custom Blockchain Ledger
-             |
-             v
-       Consumer Verification
-             |
-             v
-       Verification Result
+                 ADMIN
+                   |
+          Creates Manufacturer
+                   |
+                   v
+              MANUFACTURER
+                   |
+            Registers Product
+                   |
+                   v
+          Product Fingerprinting
+                   |
+             SHA-256 Hash
+                   |
+                   v
+          Hash-Linked Ledger
+                   |
+             QR Code Generation
+                   |
+                   v
+                CUSTOMER
+                   |
+              Scans QR Code
+                   |
+                   v
+          Product Verification
+                   |
+                   v
+          Ledger Integrity Check
+                   |
+                   v
+          Verification Result
 ```
 
-## ⚙️ Getting Started
+## 🔐 Hash-Linked Ledger
 
-Follow these instructions to run BlockGuard locally.
+BlockGuard implements a custom blockchain-inspired ledger using SHA-256 cryptographic hashing.
+
+Each ledger block contains information such as:
+
+- Block index
+- Product reference
+- Timestamp
+- Current block hash
+- Previous block hash
+
+Each block is linked to the previous block through its hash, creating a sequential chain.
+
+If the data in an existing block is modified, its hash changes, which can invalidate the subsequent links and expose inconsistencies during integrity verification.
+
+**Note:** BlockGuard uses a centralized database with a custom hash-linked ledger. It is not a decentralized blockchain network and does not use cryptocurrency or smart contracts.
+
+## 🛠️ Technology Stack
+
+| Category | Technologies |
+|---|---|
+| Frontend | Next.js, React, TypeScript |
+| Styling | Tailwind CSS, shadcn/ui |
+| Backend | Next.js API Routes, Node.js |
+| Database | PostgreSQL (Neon) |
+| ORM | Prisma |
+| Authentication | NextAuth.js |
+| Cryptography | SHA-256 |
+| Deployment | Vercel |
+| Version Control | Git, GitHub |
+
+## 🗄️ Database
+
+BlockGuard uses PostgreSQL to store application data, including:
+
+- User accounts and roles
+- Manufacturer information
+- Registered products
+- Ledger blocks
+- Product verification records
+
+Prisma ORM is used for database access and schema management.
+
+## ⚙️ Local Installation
 
 ### Prerequisites
 
 - Node.js
 - npm
-- Git
+- PostgreSQL database
 
 ### 1. Clone the repository
 
 ```bash
 git clone https://github.com/YaassinMD/BlockGuard.git
-```
-
-### 2. Navigate to the project directory
-
-```bash
 cd BlockGuard
 ```
 
-### 3. Install dependencies
+### 2. Install dependencies
 
 ```bash
 npm install
 ```
 
-### 4. Configure environment variables
+### 3. Configure environment variables
 
-Create a `.env` file in the project root and add:
+Create a local `.env` file using the provided `.env.example` as a reference.
 
-```env
-DATABASE_URL="file:../db/custom.db"
-```
+Configure the required database connection and authentication environment variables.
 
-### 5. Generate Prisma Client
+**Important:** Never commit `.env` files, database credentials, authentication secrets, or other sensitive information.
 
-```bash
-npx prisma generate
-```
-
-### 6. Initialize the database
+### 4. Generate Prisma Client
 
 ```bash
-npm run db:push
+npx prisma generate --schema prisma/postgresql/schema.prisma
 ```
 
-### 7. Start the development server
+### 5. Start the development server
 
 ```bash
 npm run dev
 ```
 
-Open your browser and visit:
+Open the application:
 
 ```text
 http://localhost:3000
 ```
 
-## 📁 Project Structure
+## ☁️ Deployment
 
-```text
-BlockGuard/
-├── db/
-├── prisma/
-│   └── schema.prisma
-├── public/
-├── src/
-│   ├── app/
-│   │   ├── api/
-│   │   ├── globals.css
-│   │   ├── layout.tsx
-│   │   └── page.tsx
-│   ├── components/
-│   │   └── ui/
-│   ├── hooks/
-│   └── lib/
-│       ├── blockchain.ts
-│       ├── db.ts
-│       └── utils.ts
-├── .env.example
-├── package.json
-└── README.md
-```
+BlockGuard is deployed using:
 
-## 🔗 API Routes
+- **Application Hosting:** Vercel
+- **Database Hosting:** Neon PostgreSQL
+- **Repository:** GitHub
 
-The application uses Next.js API routes for backend operations.
+Live application: https://block-guard-mauve.vercel.app/
 
-| Endpoint | Purpose |
-|---|---|
-| `/api/products` | Product registration and retrieval |
-| `/api/verify` | Product QR verification |
-| `/api/blocks` | Blockchain block information |
-| `/api/stats` | Dashboard statistics |
-| `/api/seed` | Sample data initialization |
+## 🔒 Security Considerations
 
-## 🔒 Blockchain Implementation
-
-BlockGuard implements a custom blockchain-inspired linked-block structure.
-
-Each block contains:
-- Block index
-- Timestamp
-- Product information
-- Current hash
-- Previous block hash
-- Nonce
-- Stored data
-
-The implementation demonstrates concepts such as block linking, hash references and proof-of-work simulation.
-
-**Note:** This project currently uses a custom blockchain simulation and a simplified hash function. It is an educational prototype, not a production-grade decentralized blockchain implementation.
+- Role-based authorization for protected operations.
+- Server-side ownership checks for manufacturer products.
+- Cryptographic SHA-256 hashing for product fingerprints and ledger links.
+- Environment-based configuration for sensitive credentials.
+- Public verification separated from authenticated management operations.
 
 ## 🎯 Project Objectives
 
-- Develop a QR-code-based product authentication system.
-- Demonstrate blockchain concepts for maintaining linked product records.
-- Help consumers identify products that are not registered in the system.
-- Maintain verification records and improve product traceability.
+1. Develop a reliable platform for product authenticity verification.
+2. Use cryptographic hashing to create tamper-evident product records.
+3. Provide QR-based verification accessible to customers.
+4. Implement role-based access and manufacturer-specific product management.
+5. Demonstrate how blockchain-inspired concepts can improve transparency and traceability.
 
-## 🔮 Future Improvements
+## 🔮 Future Enhancements
 
-- Integrate a real cryptographic hashing algorithm such as SHA-256.
-- Implement stronger blockchain integrity validation.
-- Add manufacturer authentication and role-based access control.
-- Integrate a real decentralized blockchain network.
-- Support mobile QR-code scanning.
-- Deploy the application to a cloud platform.
+- Integration with IoT-based product tracking.
+- Enhanced analytics and reporting.
+- Product lifecycle tracking.
+- Support for additional verification mechanisms.
+- Expanded audit and monitoring capabilities.
 
 ## 👨‍💻 Author
 
 **Mohammed Yaassin**
 
+Computer Science and Engineering Student
+
 - GitHub: [@YaassinMD](https://github.com/YaassinMD)
-- Project: [BlockGuard](https://github.com/YaassinMD/BlockGuard)
 
 ---
 
