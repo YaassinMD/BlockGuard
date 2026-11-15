@@ -1,119 +1,102 @@
-
 import { db } from '@/lib/db';
 import {
   calculateProductFingerprint,
-  generateQRCode,
-  createProductBlock,
   createGenesisBlock,
+  createProductBlock,
+  generateQRCode,
   verifyChain,
   type BlockData,
 } from '@/lib/blockchain';
-import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/authorization';
+import { NextResponse } from 'next/server';
 
+const showcaseCompany = 'Demo Manufacturer — BlockGuard Showcase';
 const demoProducts = [
   {
-    name: 'Premium Smartwatch Pro X1',
-    category: 'Electronics',
-    manufacturer: 'TechCorp Industries',
-    batchNo: 'TC-2024-001',
-    description:
-      'High-end smartwatch with health monitoring, GPS, and 7-day battery life.',
-  },
-  {
-    name: 'Organic Green Tea Supreme',
-    category: 'Food & Beverages',
-    manufacturer: 'Natural Harvest Co.',
-    batchNo: 'NH-2024-088',
-    description:
-      'Premium organic green tea sourced from certified plantations.',
-  },
-  {
-    name: 'Leather Executive Briefcase',
+    name: "Nike Air Force 1 '07",
     category: 'Fashion & Accessories',
-    manufacturer: 'Italian Craft Ltd.',
-    batchNo: 'IC-2024-205',
-    description:
-      'Hand-crafted genuine Italian leather briefcase with RFID protection.',
+    batchNo: 'DEMO-BG-NIKE-AF1',
+    description: 'DEMO DATA. Illustrative record only; no Nike partnership or authorization is claimed.',
   },
   {
-    name: 'Pharmaceutical Supplement VitaPlus',
-    category: 'Health & Medicine',
-    manufacturer: 'MediSafe Pharmaceuticals',
-    batchNo: 'MS-2024-442',
-    description:
-      'Quality-tested dietary supplement with verified active ingredients.',
-  },
-  {
-    name: 'Signature Perfume Essence',
-    category: 'Cosmetics',
-    manufacturer: 'Luxe Fragrance House',
-    batchNo: 'LF-2024-117',
-    description:
-      'Premium signature perfume with unique product tracking identifier.',
-  },
-  {
-    name: 'Wireless Noise-Cancelling Headphones',
+    name: 'Samsung Galaxy S25',
     category: 'Electronics',
-    manufacturer: 'SoundWave Audio',
-    batchNo: 'SW-2024-330',
-    description:
-      'Active noise-cancelling headphones with 30-hour battery life.',
+    batchNo: 'DEMO-BG-SAMSUNG-S25',
+    description: 'DEMO DATA. Illustrative record only; no Samsung partnership or authorization is claimed.',
+  },
+  {
+    name: 'Apple iPhone 16',
+    category: 'Electronics',
+    batchNo: 'DEMO-BG-APPLE-I16',
+    description: 'DEMO DATA. Illustrative record only; no Apple partnership or authorization is claimed.',
   },
 ];
 
-// POST /api/seed - Regenerate development demo data
 export async function POST() {
-  // Never allow this destructive endpoint in production
-  if (process.env.NODE_ENV === 'production') {
-    return NextResponse.json(
-      { error: 'Demo seeding is disabled in production' },
-      { status: 404 }
-    );
+  // Local development may point at production Neon. NODE_ENV alone is not a
+  // safe signal; this route is enabled only by the explicit test launcher.
+  if (
+    process.env.NODE_ENV === 'production' ||
+    process.env.BLOCKGUARD_DATABASE_ENV !== 'test'
+  ) {
+    return NextResponse.json({ error: 'Demo setup is available only on the testing database.' }, { status: 404 });
   }
 
   try {
     const authorization = await requireRole(['ADMIN']);
     if (authorization instanceof NextResponse) return authorization;
 
+    const manufacturer = await db.user.findFirst({
+      where: { role: 'MANUFACTURER', companyName: showcaseCompany, isActive: true },
+      select: { id: true },
+    });
+    if (!manufacturer) {
+      return NextResponse.json(
+        { error: `Create an active ${showcaseCompany} manufacturer account first.` },
+        { status: 409 }
+      );
+    }
+
     const result = await db.$transaction(async (tx) => {
-      let storedBlocks = await tx.block.findMany({ orderBy: { index: 'asc' } });
-      if (storedBlocks.length === 0) {
+      let blocks = await tx.block.findMany({ orderBy: { index: 'asc' } });
+      if (blocks.length === 0) {
         const genesis = createGenesisBlock();
-        const storedGenesis = await tx.block.create({ data: genesis });
-        storedBlocks = [storedGenesis];
-      } else {
-        const chain = verifyChain(storedBlocks as BlockData[]);
-        if (!chain.valid) throw new Error('LEDGER_INTEGRITY_FAILED');
+        blocks = [await tx.block.create({ data: genesis })];
+      } else if (!verifyChain(blocks as BlockData[]).valid) {
+        throw new Error('LEDGER_INTEGRITY_FAILED');
       }
-      let previousBlock = storedBlocks[storedBlocks.length - 1];
 
-      // Add missing demo products without replacing existing product or ledger rows.
+      let previousBlock = blocks[blocks.length - 1];
+      const addedProducts: Array<{ name: string; batchNo: string; qrCode: string }> = [];
       for (const item of demoProducts) {
-        const existingProduct = await tx.product.findUnique({ where: { batchNo: item.batchNo } });
-        if (existingProduct) continue;
+        const existing = await tx.product.findUnique({ where: { batchNo: item.batchNo } });
+        if (existing) {
+          if (!existing.isDemo || existing.manufacturerId !== manufacturer.id) {
+            throw new Error('DEMO_BATCH_CONFLICT');
+          }
+          continue;
+        }
+
         const qrCode = generateQRCode();
-
-        const blockchainHash = calculateProductFingerprint({
-            name: item.name,
-            category: item.category,
-            manufacturer: item.manufacturer,
-            batchNo: item.batchNo,
-            description: item.description ?? null,
-            qrCode,
-        });
-
+        const fingerprint = {
+          ...item,
+          manufacturer: showcaseCompany,
+          qrCode,
+          description: item.description,
+        };
+        const blockchainHash = calculateProductFingerprint(fingerprint);
         const product = await tx.product.create({
           data: {
             ...item,
+            manufacturer: showcaseCompany,
             qrCode,
             blockchainHash,
+            manufacturerId: manufacturer.id,
+            isDemo: true,
           },
         });
-
         const block = createProductBlock(product, previousBlock);
-
-        const storedBlock = await tx.block.create({
+        previousBlock = await tx.block.create({
           data: {
             index: block.index,
             timestamp: block.timestamp,
@@ -125,66 +108,26 @@ export async function POST() {
             data: block.data,
           },
         });
-        previousBlock = storedBlock;
+        addedProducts.push({ name: product.name, batchNo: product.batchNo, qrCode: product.qrCode });
       }
 
-      const demoVerificationCodes = [
-        'FAKE-XXXX-YYYY-ZZZZ',
-        'FAKE-AAAA-BBBB-CCCC',
-        'FAKE-1111-2222-3333',
-      ];
-      const existingDemoVerifications = await tx.verification.findMany({
-        where: { qrCode: { in: demoVerificationCodes } },
-        select: { qrCode: true },
-      });
-      const existingCodes = new Set(existingDemoVerifications.map(({ qrCode }) => qrCode));
-      const missingDemoVerifications = [
-          {
-            qrCode: 'FAKE-XXXX-YYYY-ZZZZ',
-            isAuthentic: false,
-            result: 'Product not found in the registration database.',
-            ipAddress: '192.168.1.45',
-          },
-          {
-            qrCode: 'FAKE-AAAA-BBBB-CCCC',
-            isAuthentic: false,
-            result: 'Product not found in the registration database.',
-            ipAddress: '10.0.0.12',
-          },
-          {
-            qrCode: 'FAKE-1111-2222-3333',
-            isAuthentic: false,
-            result: 'Invalid or unregistered QR code.',
-            ipAddress: '172.16.0.88',
-          },
-        ].filter(({ qrCode }) => !existingCodes.has(qrCode));
-      if (missingDemoVerifications.length) await tx.verification.createMany({ data: missingDemoVerifications });
-
-      return {
-        products: await tx.product.count(),
-        blocks: await tx.block.count(),
-        verifications: await tx.verification.count(),
-        genesisHash: storedBlocks[0].hash,
-      };
+      return { addedProducts, ledgerIntegrity: verifyChain(await tx.block.findMany({ orderBy: { index: 'asc' } })).valid };
     });
 
     return NextResponse.json({
-      message: 'Missing demo data added without replacing existing records',
+      message: 'Demo products are illustrative records, not brand-authorized registrations.',
       ...result,
+    }, {
+      headers: { 'Cache-Control': 'private, no-store, max-age=0' },
     });
-  } catch (error: unknown) {
+  } catch (error) {
     if (error instanceof Error && error.message === 'LEDGER_INTEGRITY_FAILED') {
-      return NextResponse.json(
-        { error: 'Existing ledger is invalid; demo data was not changed' },
-        { status: 409 }
-      );
+      return NextResponse.json({ error: 'The existing ledger is invalid; demo data was not changed.' }, { status: 409 });
     }
-
-    console.error('Demo database seeding failed:', error);
-
-    return NextResponse.json(
-      { error: 'Unable to add demo data' },
-      { status: 500 }
-    );
+    if (error instanceof Error && error.message === 'DEMO_BATCH_CONFLICT') {
+      return NextResponse.json({ error: 'A demo batch identifier is already used by a non-demo product.' }, { status: 409 });
+    }
+    console.error('Demo setup failed');
+    return NextResponse.json({ error: 'Unable to prepare demo data.' }, { status: 500 });
   }
 }

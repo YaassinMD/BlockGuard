@@ -6,7 +6,6 @@ import {
   generateQRCode,
   createProductBlock,
   createGenesisBlock,
-  productManufacturerIdForRole,
   verifyChain,
 } from '@/lib/blockchain';
 import { Prisma } from '@prisma/client';
@@ -14,11 +13,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth-options';
+import { createProductQrImage, createProductVerificationUrl, getPublicAppUrl } from '@/lib/product-qr';
 
 const productInputSchema = z.object({
   name: z.string().trim().min(1).max(150),
   category: z.string().trim().min(1).max(100),
-  manufacturer: z.string().trim().min(1).max(150),
   batchNo: z.string().trim().min(1).max(100),
   description: z.string().trim().max(2000).optional(),
 });
@@ -27,22 +26,48 @@ const productInputSchema = z.object({
 export async function GET() {
   try {
     const session = await getServerSession(authOptions);
-    let where: Prisma.ProductWhereInput = {};
+    let currentUser: { role: string; isActive: boolean } | null = null;
     if (session?.user?.id) {
-      const currentUser = await db.user.findUnique({
+      currentUser = await db.user.findUnique({
         where: { id: session.user.id },
         select: { role: true, isActive: true },
       });
-      if (currentUser?.isActive && currentUser.role === 'MANUFACTURER') {
-        where = { manufacturerId: session.user.id };
-      }
     }
+
+    if (!currentUser?.isActive || !['ADMIN', 'MANUFACTURER'].includes(currentUser.role)) {
+      const demoProducts = await db.product.findMany({
+        where: { isDemo: true },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          name: true,
+          category: true,
+          manufacturer: true,
+          batchNo: true,
+          description: true,
+          qrCode: true,
+          isVerified: true,
+          verifiedCount: true,
+          isDemo: true,
+          createdAt: true,
+        },
+      });
+      return NextResponse.json(demoProducts, {
+        headers: { 'Cache-Control': 'no-store' },
+      });
+    }
+
+    const where: Prisma.ProductWhereInput = currentUser.role === 'MANUFACTURER'
+      ? { manufacturerId: session?.user?.id }
+      : {};
     const products = await db.product.findMany({
       where,
       orderBy: { createdAt: 'desc' },
     });
 
-    return NextResponse.json(products);
+    return NextResponse.json(products, {
+      headers: { 'Cache-Control': 'private, no-store, max-age=0' },
+    });
   } catch (error: unknown) {
     console.error('Failed to fetch products:', error);
 
@@ -56,11 +81,7 @@ export async function GET() {
 // POST /api/products - Register a new product
 export async function POST(request: NextRequest) {
   try {
-    // Only administrators and manufacturers can register products
-    const authorization = await requireRole([
-      'ADMIN',
-      'MANUFACTURER',
-    ]);
+    const authorization = await requireRole(['MANUFACTURER']);
 
     if (authorization instanceof NextResponse) {
       return authorization;
@@ -73,7 +94,15 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    const { name, category, manufacturer, batchNo, description } = validation.data;
+    const { name, category, batchNo, description } = validation.data;
+    const manufacturer = authorization.user.companyName?.trim()
+      || authorization.user.name?.trim()
+      || authorization.user.email?.trim()
+      || 'Manufacturer';
+    const publicAppUrl = getPublicAppUrl();
+    const qrCode = generateQRCode();
+    const verificationUrl = createProductVerificationUrl(qrCode, publicAppUrl);
+    const qrImageDataUrl = await createProductQrImage(verificationUrl);
 
     // Perform all database writes in one transaction
     const product = await db.$transaction(async (tx) => {
@@ -85,9 +114,6 @@ export async function POST(request: NextRequest) {
       if (existingBatch) {
         throw new Error('BATCH_ALREADY_REGISTERED');
       }
-
-      // Generate a cryptographically random QR identifier
-      const qrCode = generateQRCode();
 
       // Generate a deterministic SHA-256 product fingerprint
       const productFingerprint = {
@@ -136,10 +162,7 @@ export async function POST(request: NextRequest) {
           description,
           qrCode,
           blockchainHash,
-          manufacturerId: productManufacturerIdForRole(
-            authorization.user.role,
-            authorization.user.id
-          ),
+          manufacturerId: authorization.user.id,
         },
       });
 
@@ -162,7 +185,13 @@ export async function POST(request: NextRequest) {
       return createdProduct;
     });
 
-    return NextResponse.json(product, { status: 201 });
+    return NextResponse.json(
+      { ...product, verificationUrl, qrImageDataUrl },
+      {
+        status: 201,
+        headers: { 'Cache-Control': 'private, no-store, max-age=0' },
+      }
+    );
   } catch (error: unknown) {
     if (error instanceof Error && error.message === 'LEDGER_INTEGRITY_FAILED') {
       return NextResponse.json(

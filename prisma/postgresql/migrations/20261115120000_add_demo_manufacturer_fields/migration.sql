@@ -1,0 +1,2 @@
+ALTER TABLE "User" ADD COLUMN "companyName" TEXT;
+ALTER TABLE "Product" ADD COLUMN "isDemo" BOOLEAN NOT NULL DEFAULT false;

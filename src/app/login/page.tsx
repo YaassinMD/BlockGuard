@@ -2,7 +2,7 @@
 'use client';
 
 import { useState } from 'react';
-import { signIn } from 'next-auth/react';
+import { getSession, signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Shield, Lock, Mail, Loader2 } from 'lucide-react';
@@ -32,7 +32,14 @@ export default function LoginPage() {
         return;
       }
 
-      router.push('/');
+      const session = await getSession();
+      const role = session?.user?.role;
+      const dashboard = role === 'ADMIN'
+        ? '/#admin-dashboard'
+        : role === 'MANUFACTURER'
+          ? '/#dashboard'
+          : '/#dashboard';
+      router.replace(dashboard);
       router.refresh();
     } catch {
       setError('Unable to sign in. Please try again.');
